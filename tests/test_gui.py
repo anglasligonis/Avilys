@@ -707,3 +707,35 @@ def test_update_check_follows_the_setting(tmp_path):
     assert dlg.result_config().check_updates is False
     win.updates.stop()
     win.quit()
+
+
+def test_peers_still_connecting_are_not_called_plaintext(tmp_path):
+    """A connection still being set up has no encryption yet. It must not show
+    as "Plaintext", which looks like encryption is being ignored."""
+    import socket
+    import threading
+
+    app = make_app([])
+    # A "peer" that accepts the connection and then never answers
+    silent = socket.socket()
+    silent.bind(("127.0.0.1", 0))
+    silent.listen(5)
+    held = []
+    threading.Thread(target=lambda: held.append(silent.accept()), daemon=True).start()
+
+    (tmp_path / "src").mkdir()
+    tfile = make_torrent(tmp_path / "src", tmp_path / "t.torrent", size=256 * 1024)
+    win = MainWindow(gui_config(tmp_path, encryption="require"))
+    win.add_sources([str(tfile)])
+    spin(app, lambda: win.engine.handles)
+    (h,) = win.engine.handles.values()
+    h.connect_peer(("127.0.0.1", silent.getsockname()[1]))
+    spin(app, lambda: (win.refresh(), win.model.rowCount() == 1)[1])  # the table has caught up
+    win.table.selectRow(0)
+    win.details.setCurrentWidget(win.details.peers)
+    spin(app, lambda: (win.refresh(), win.details.peers.rowCount() == 1)[1])
+    row = {win.details.peers.horizontalHeaderItem(c).text(): win.details.peers.item(0, c).text()
+           for c in range(win.details.peers.columnCount())}
+    assert row["Encryption"] == "–" and row["Client"] == "Connecting…"
+    win.quit()
+    silent.close()

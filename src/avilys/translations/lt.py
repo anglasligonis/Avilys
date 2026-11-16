@@ -273,6 +273,7 @@ STRINGS = {
     "“{name}” hasn't been downloaded yet.": "Failas „{name}“ dar neatsiųstas.",
     "Header only": "Tik antraštė",
     "Plaintext": "Nešifruota",
+    "Connecting…": "Jungiamasi…",
     "(waiting for metadata)": "(laukiama metaduomenų)",
     "IP Geolocation by DB-IP (db-ip.com)": "IP geografinė vieta: DB-IP (db-ip.com)",
 

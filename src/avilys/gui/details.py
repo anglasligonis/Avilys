@@ -337,7 +337,12 @@ class DetailPane(QTabWidget):
         rows = []
         for p in sorted(h.get_peer_info(), key=lambda p: -p.payload_down_speed):
             flags = int(p.flags)
-            if flags & int(lt.peer_info.rc4_encrypted):
+            # Still connecting: nothing is agreed yet, encryption included. With
+            # encryption required, a peer that refuses it never gets past here.
+            pending = bool(flags & (int(lt.peer_info.connecting) | int(lt.peer_info.handshake)))
+            if pending:
+                enc = "–"
+            elif flags & int(lt.peer_info.rc4_encrypted):
                 enc = "RC4"
             elif flags & int(lt.peer_info.plaintext_encrypted):
                 enc = tr("Header only")
@@ -345,6 +350,8 @@ class DetailPane(QTabWidget):
                 enc = tr("Plaintext")
             src = ", ".join(tr(name) for bit, name in SOURCES if int(p.source) & int(bit)) or tr("Incoming")
             client = p.client.decode(errors="replace") if isinstance(p.client, bytes) else p.client
+            if pending:
+                client = tr("Connecting…")
             rows.append((
                 self.country_cell(p.ip[0]), f"{p.ip[0]}:{p.ip[1]}", client or "?",
                 "µTP" if flags & UTP_SOCKET else "TCP", enc, src,
