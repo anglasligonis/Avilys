@@ -113,6 +113,7 @@ def gui_config(tmp_path, **changes) -> Config:
                 listen="127.0.0.1:0", dht=False, lsd=False, port_mapping=False,
                 close_to_tray=False, confirm_add=False,
                 prevent_sleep=False,   # never touch the machine's real sleep settings
+                check_updates=False,   # no requests to GitHub from tests
                 peer_countries=False)  # no monthly database download from tests
     return Config(**{**base, **changes})
 
@@ -624,3 +625,85 @@ def test_torrent_errors_are_shown_and_can_be_retried(tmp_path):
     assert [title for title, _ in win.notifications] == ["Torrent stopped", "Download complete"]
     win.quit()
     seeder.shutdown()
+
+
+def test_new_version_pop_up(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from avilys import __version__
+    from avilys.gui import app as app_mod
+    from test_update import fake_github, release
+
+    app = make_app([])
+    win = MainWindow(gui_config(tmp_path))
+    win.show()
+    opened, told = [], []
+    monkeypatch.setattr(app_mod.files, "open_url", opened.append)
+    monkeypatch.setattr(app_mod.QMessageBox, "information", lambda parent, title, text: told.append(text))
+    monkeypatch.setattr(app_mod.QMessageBox, "warning", lambda parent, title, text: told.append(text))
+
+    def wait_for_box():
+        spin(app, lambda: win.update_box is not None)
+        box = win.update_box
+        return box, {b.text(): b for b in box.buttons()}
+
+    with fake_github(release("v99.0.0")) as (url, seen):
+        win.updates.url = url
+        win.updates.check()  # the automatic daily check
+        box, buttons = wait_for_box()
+        assert box.text() == f"Avilys 99.0.0 is available. You have {__version__}."
+        assert set(buttons) == {"Open download page", "Skip this version", "Later"}
+        buttons["Open download page"].click()
+        spin(app, lambda: win.update_box is None)
+        assert opened == ["https://github.com/anglasligonis/Avilys/releases/tag/v99.0.0"]
+
+        win.updates.check()
+        box, buttons = wait_for_box()
+        buttons["Skip this version"].click()
+        spin(app, lambda: win.update_box is None)
+        assert win.cfg.skipped_version == "99.0.0"
+
+        # A skipped version stays quiet in the daily check...
+        n = len(seen)
+        win.updates.check()
+        spin(app, lambda: len(seen) > n and not win.updates.busy)
+        app.processEvents()
+        assert win.update_box is None
+        # ...but asking with "Check now" still shows it
+        win.check_for_updates(manual=True)
+        box, buttons = wait_for_box()
+        buttons["Later"].click()
+        spin(app, lambda: win.update_box is None)
+        assert opened == ["https://github.com/anglasligonis/Avilys/releases/tag/v99.0.0"]
+
+    # Nothing newer: only "Check now" says so
+    with fake_github(release(f"v{__version__}")) as (url, seen):
+        win.updates.url = url
+        win.check_for_updates(manual=True)
+        spin(app, lambda: told)
+        assert told[-1] == f"You have the latest version ({__version__})."
+
+    # Offline: only "Check now" says so; the daily check just notes it in the log
+    win.updates.url = "http://127.0.0.1:9/releases/latest"
+    win.check_for_updates(manual=True)
+    spin(app, lambda: len(told) == 2)
+    assert told[-1].startswith("Couldn't check for updates: ")
+    assert win.update_box is None
+    win.quit()
+
+
+def test_update_check_follows_the_setting(tmp_path):
+    from avilys.gui.dialogs import SettingsDialog
+
+    make_app([])
+    win = MainWindow(gui_config(tmp_path))
+    assert not win.updates.timer.isActive()  # tests turn it off
+    win.quit()
+    win = MainWindow(gui_config(tmp_path, check_updates=True))
+    assert win.updates.timer.isActive()
+    dlg = SettingsDialog(win.cfg, on_check_updates=lambda: None)
+    assert dlg.check_updates.isChecked() and dlg.check_now.isEnabled()
+    dlg.check_updates.setChecked(False)
+    assert dlg.result_config().check_updates is False
+    win.updates.stop()
+    win.quit()

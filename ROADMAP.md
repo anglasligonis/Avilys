@@ -67,7 +67,8 @@ the engine.
       and uninstalls. A `v*` tag publishes both to a GitHub Release.
 - [ ] Code signing for Windows (SmartScreen warns about unsigned installers
       until they build up a reputation). This needs a certificate, and is your call.
-- [ ] Auto-update check (compare against the latest GitHub Release).
+- [x] Update check: once a day, compare with the latest GitHub Release and offer
+      to open its download page (Settings → General → Updates).
 - [ ] Smaller bundle: trim unused Qt modules and ICU data (the AppImage is about 60 MB).
 - [ ] Optional `.deb` / Flatpak for Linux users who prefer them.
 

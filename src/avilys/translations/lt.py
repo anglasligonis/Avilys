@@ -365,6 +365,28 @@ STRINGS = {
     "IP blocklist": "IP blokavimo sąrašas",
     "Countries": "Šalys",
     "Start with the system": "Paleidimas su sistema",
+    "Tell me when a new version is out": "Pranešti, kai išleidžiama nauja versija",
+    "Check now": "Tikrinti dabar",
+    "Updates": "Atnaujinimai",
+    "Avilys asks GitHub once a day whether there's a newer release. "
+    "It never downloads or installs anything by itself.":
+        "Avilys kartą per dieną paklausia GitHub, ar yra naujesnė versija. "
+        "Pats nieko neatsisiunčia ir neįdiegia.",
+    "Check for updates": "Atnaujinimų paieška",
+    "Couldn't check for updates: {error}": "Nepavyko patikrinti atnaujinimų: {error}",
+    "update check failed: {error}": "nepavyko patikrinti atnaujinimų: {error}",
+    "You have the latest version ({version}).": "Naudojate naujausią versiją ({version}).",
+    "Update available": "Yra atnaujinimas",
+    "Avilys {version} is available.": "Išleista Avilys {version}.",
+    "Avilys {version} is available. You have {current}.": "Išleista Avilys {version}. Jūs naudojate {current}.",
+    "Download it from the releases page on GitHub. "
+    "Your torrents and settings are kept when you install it.":
+        "Atsisiųskite ją iš leidimų puslapio GitHub svetainėje. "
+        "Įdiegus jūsų torentai ir nustatymai išliks.",
+    "Open download page": "Atverti atsisiuntimo puslapį",
+    "Skip this version": "Praleisti šią versiją",
+    "Later": "Vėliau",
+    "no published release found": "nerasta paskelbtos versijos",
     "Couldn't change this: {error}": "Nepavyko pakeisti: {error}",
     "Save downloads to": "Atsiuntimų aplankas",
     "Folder for unfinished downloads": "Nebaigtų atsiuntimų aplankas",

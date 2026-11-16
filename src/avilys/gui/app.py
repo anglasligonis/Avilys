@@ -29,10 +29,12 @@ from ..engine import Config, Engine, already_added, has_error, key_of, parse_sou
 from ..i18n import N_, qt_text, tr, trn
 from ..geoip import GeoIP
 from ..power import SleepBlocker
+from ..update import RELEASES_PAGE, Release, is_newer
 from . import autostart, files, theme
 from .add_dialog import AddTorrentDialog
 from .details import DetailPane
 from .dialogs import SettingsDialog, confirm_remove, kib_box
+from .updates import UpdateChecker
 from .models import FILTERS, FilterProxy, ProgressDelegate, TorrentModel, category, key
 from .widgets import SpeedHistory
 
@@ -130,6 +132,13 @@ class MainWindow(QMainWindow):
         self.watch_timer = QTimer(self, interval=5_000, timeout=self._scan_watch_folder)
         for t in (self.pump_timer, self.refresh_timer, self.save_timer, self.watch_timer):
             t.start()
+
+        self.updates = UpdateChecker(self)
+        self.updates.finished.connect(self._update_checked)
+        self.update_box: QMessageBox | None = None  # the "new version" pop-up, while open
+        self._pending_update: Release | None = None  # found while hidden in the tray
+        if cfg.check_updates:
+            self.updates.start()
         self.refresh()
 
     @property
@@ -302,6 +311,7 @@ class MainWindow(QMainWindow):
         menu.addAction(self.act_quit)
         tray.setContextMenu(menu)
         tray.activated.connect(self._tray_activated)
+        tray.messageClicked.connect(self.show_window)  # e.g. "a new version is out"
         tray.show()
         self.tray = tray
         # With a tray, hiding the window must not end the app; quit() ends it.
@@ -717,11 +727,16 @@ class MainWindow(QMainWindow):
         config.save(new)
 
     def open_settings(self) -> None:
-        dlg = SettingsDialog(self.cfg, self, blocked_ranges=self.engine.blocked_ranges, on_about=self.show_about)
+        dlg = SettingsDialog(self.cfg, self, blocked_ranges=self.engine.blocked_ranges, on_about=self.show_about,
+                             on_check_updates=lambda: self.check_for_updates(manual=True))
         if dlg.exec():
             new = dlg.result_config()
             dlg.apply_autostart()
             theme_changed = new.theme != self.cfg.theme
+            if new.check_updates and not self.cfg.check_updates:
+                self.updates.start()
+            elif not new.check_updates:
+                self.updates.stop()
             self.engine.apply_config(new)
             config.save(new)
             self.details.show_countries = new.peer_countries
@@ -731,6 +746,68 @@ class MainWindow(QMainWindow):
                 self.apply_theme()
             self._apply_icons()
             self.refresh()
+
+    # -- update check ---------------------------------------------------------
+    def check_for_updates(self, manual: bool = False) -> None:
+        """manual: the user asked, so also say when there's nothing new or the
+        check failed, and show a version they had skipped."""
+        if manual:
+            QApplication.setOverrideCursor(Qt.BusyCursor)
+        self.updates.check(manual)
+
+    def _update_checked(self, release, error: str, manual: bool) -> None:
+        if manual:
+            QApplication.restoreOverrideCursor()
+        if release is None:
+            if manual:
+                QMessageBox.warning(QApplication.activeWindow() or self, tr("Check for updates"),
+                                    tr("Couldn't check for updates: {error}", error=error))
+            else:
+                self.engine.log(tr("update check failed: {error}", error=error))
+            return
+        if not is_newer(release.version, __version__):
+            if manual:
+                QMessageBox.information(QApplication.activeWindow() or self, tr("Check for updates"),
+                                        tr("You have the latest version ({version}).", version=__version__))
+            return
+        if release.version == self.cfg.skipped_version and not manual:
+            return
+        if not manual and not self.isVisible() and self.tray is not None:
+            # Hidden in the tray: a quiet notification now, the pop-up when the window opens
+            self._pending_update = release
+            self.tray.showMessage(tr("Update available"),
+                                  tr("Avilys {version} is available.", version=release.version), app_icon(), 10_000)
+            return
+        self.show_update(release)
+
+    def show_update(self, release: Release) -> None:
+        """The pop-up: open the release page, skip this version, or later."""
+        self._pending_update = None
+        if self.update_box is not None:
+            return  # already showing
+        box = QMessageBox(QApplication.activeWindow() or self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(tr("Update available"))
+        box.setText(tr("Avilys {version} is available. You have {current}.",
+                       version=release.version, current=__version__))
+        box.setInformativeText(tr("Download it from the releases page on GitHub. "
+                                  "Your torrents and settings are kept when you install it."))
+        get = box.addButton(tr("Open download page"), QMessageBox.AcceptRole)
+        skip = box.addButton(tr("Skip this version"), QMessageBox.DestructiveRole)
+        box.addButton(tr("Later"), QMessageBox.RejectRole)
+        box.setDefaultButton(get)
+
+        def done(_=None):
+            clicked = box.clickedButton()
+            if clicked is get:
+                files.open_url(release.url or RELEASES_PAGE)
+            elif clicked is skip:
+                self.set_preferences(skipped_version=release.version)
+            self.update_box = None
+
+        box.finished.connect(done)
+        self.update_box = box
+        box.open()
 
     def show_about(self) -> None:
         from .about import AboutDialog
@@ -744,6 +821,8 @@ class MainWindow(QMainWindow):
         self.show()  # not showNormal(): a maximized window stays maximized
         self.raise_()
         self.activateWindow()
+        if self._pending_update is not None:
+            self.show_update(self._pending_update)
 
     def _tray_activated(self, reason) -> None:
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
@@ -796,6 +875,7 @@ class MainWindow(QMainWindow):
         self.sleep_blocker.set(False)
         for t in (self.pump_timer, self.refresh_timer, self.save_timer, self.watch_timer):
             t.stop()
+        self.updates.stop()
         if self.tray is not None:
             self.tray.hide()
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -909,7 +989,8 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         cfg = Config(state_dir=Path(tmp) / "state", save_path=Path(tmp) / "data",
                      listen="127.0.0.1:0", dht=False, lsd=False, port_mapping=False,
-                     close_to_tray=False, confirm_add=False, peer_countries=False)
+                     close_to_tray=False, confirm_add=False, peer_countries=False,
+                     prevent_sleep=False, check_updates=False)
         win = MainWindow(cfg)
         errors = win.add_sources(["magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=selftest"])
         deadline = time.monotonic() + 10

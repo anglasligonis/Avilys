@@ -97,6 +97,10 @@ avilys-gui                    # or: avilys gui
   service.
 - The window remembers its size, position, column widths, sort order and the
   open detail tab.
+- **New versions:** once a day Avilys checks whether a newer release is out.
+  If there is one, a pop-up offers to open its download page on GitHub, or to
+  skip that version. Nothing is downloaded or installed automatically. Turn
+  it off, or check right away, in Settings → General → Updates.
 
 **Right-click a torrent:** Try again (after an error), Open folder, Move to…,
 Copy magnet link, Download in order (for previewing videos), Speed limits…,
@@ -240,6 +244,10 @@ Avilys connects to the internet only for the following:
 - **Your router and local network:** when UPnP / NAT-PMP is on, Avilys asks
   your router to open its port, and local peer discovery looks for peers on
   your own network. Both can be turned off in Settings → Connection.
+- **Update check:** once a day, Avilys asks GitHub's public API for the
+  latest Avilys release. The request contains only the word "Avilys", and
+  GitHub sees your IP address. Turn off **Tell me when a new version is
+  out** in Settings → General to stop it.
 - **Country database:** about once a month, Avilys downloads DB-IP's free
   country database from `download.db-ip.com`, to show peer countries. The
   request contains only the file name and the word "Avilys". Turn off

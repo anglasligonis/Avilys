@@ -15,6 +15,11 @@ def open_path(path: Path) -> bool:
     return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
 
+def open_url(url: str) -> bool:
+    """Open a web page in the default browser."""
+    return QDesktopServices.openUrl(QUrl(url))
+
+
 def reveal(path: Path) -> bool:
     """Open the folder holding `path`, with the item selected where the
     platform allows it. Falls back to just opening the folder."""

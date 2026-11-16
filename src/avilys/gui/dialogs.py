@@ -6,12 +6,12 @@ import dataclasses
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QTime, QUrl
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QTime, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTabWidget, QTimeEdit,
-    QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from ..config import listen_on, port_of
@@ -103,12 +103,18 @@ def time_edit(hhmm: str) -> QTimeEdit:
 
 
 def page(*rows) -> QWidget:
+    """A settings tab. It scrolls when the screen is too small to show it all."""
     w = QWidget()
     form = QFormLayout(w)
     form.setVerticalSpacing(10)
     for label, widget in rows:
         form.addRow(label, widget)
-    return w
+    scroll = QScrollArea()
+    scroll.setWidget(w)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    return scroll
 
 
 def hint(text: str) -> QLabel:
@@ -119,7 +125,8 @@ def hint(text: str) -> QLabel:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, cfg: Config, parent=None, blocked_ranges: int | None = None, on_about=None):
+    def __init__(self, cfg: Config, parent=None, blocked_ranges: int | None = None, on_about=None,
+                 on_check_updates=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Settings"))
         self.setMinimumWidth(620)
@@ -144,6 +151,18 @@ class SettingsDialog(QDialog):
         self.autostart.setEnabled(autostart.supported())
         self.prevent_sleep = QCheckBox(tr("Keep the computer awake while downloading"))
         self.prevent_sleep.setChecked(cfg.prevent_sleep)
+        self.check_updates = QCheckBox(tr("Tell me when a new version is out"))
+        self.check_updates.setChecked(cfg.check_updates)
+        self.check_now = QPushButton(tr("Check now"))
+        self.check_now.setAutoDefault(False)
+        self.check_now.setEnabled(on_check_updates is not None)
+        if on_check_updates is not None:
+            self.check_now.clicked.connect(on_check_updates)
+        updates_row = QWidget()
+        ul = QHBoxLayout(updates_row)
+        ul.setContentsMargins(0, 0, 0, 0)
+        ul.addWidget(self.check_updates, 1)
+        ul.addWidget(self.check_now)
         self.confirm_add = QCheckBox(tr("Ask for the save folder and files when adding a torrent"))
         self.confirm_add.setChecked(cfg.confirm_add)
         self.close_to_tray = QCheckBox(tr("Keep downloading in the tray when the window is closed"))
@@ -159,15 +178,18 @@ class SettingsDialog(QDialog):
         self.language.setCurrentIndex(max(self.language.findData(cfg.language), 0))
         self.default_status = QLabel()
         self.default_status.setWordWrap(True)
-        self.default_status.setMinimumHeight(2 * self.default_status.fontMetrics().lineSpacing())  # two sentences
         self.default_button = QPushButton(tr("Make Avilys the default"))
         self.default_button.setAutoDefault(False)
         self.default_button.clicked.connect(self.make_default_app)
-        default_row = QWidget()
-        dl = QHBoxLayout(default_row)
+        default_row = QWidget()  # who opens links now, with the button underneath
+        dl = QVBoxLayout(default_row)
         dl.setContentsMargins(0, 0, 0, 0)
-        dl.addWidget(self.default_status, 1)
-        dl.addWidget(self.default_button)
+        dl.setSpacing(6)
+        dl.addWidget(self.default_status)
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.default_button)
+        button_row.addStretch(1)
+        dl.addLayout(button_row)
         self.refresh_default_status()
         tabs.addTab(page(
             (tr("Save new downloads to"), folder_row(self.save_path, self, tr("Save downloads to"))),
@@ -184,6 +206,9 @@ class SettingsDialog(QDialog):
             (tr("Theme"), self.theme),
             (tr("Language"), self.language),
             ("", hint(tr("A new language is used the next time Avilys starts."))),
+            (tr("Updates"), updates_row),
+            ("", hint(tr("Avilys asks GitHub once a day whether there's a newer release. "
+                         "It never downloads or installs anything by itself."))),
             (tr("Default app"), default_row),
         ), tr("General"))
 
@@ -316,6 +341,17 @@ class SettingsDialog(QDialog):
             about.clicked.connect(on_about)
         layout.addWidget(buttons)
         self.tabs = tabs
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        """Open tall enough to show the longest tab without scrolling, if the
+        screen allows; otherwise the tabs scroll."""
+        pages = [self.tabs.widget(i).widget() for i in range(self.tabs.count())]
+        want_w = max(p.sizeHint().width() for p in pages) + 48
+        want_h = max(p.sizeHint().height() for p in pages) + self.tabs.tabBar().sizeHint().height() + 90
+        screen = self.screen().availableGeometry() if self.screen() else None
+        max_h = int(screen.height() * 0.9) if screen else want_h
+        self.resize(max(self.minimumWidth(), want_w), min(want_h, max_h))
 
     def refresh_default_status(self) -> None:
         if not associations.supported():
@@ -370,6 +406,7 @@ class SettingsDialog(QDialog):
             save_path=Path(self.save_path.text()).expanduser(),
             incomplete_dir=Path(unfinished).expanduser() if self.incomplete_on.isChecked() and unfinished else None,
             prevent_sleep=self.prevent_sleep.isChecked(),
+            check_updates=self.check_updates.isChecked(),
             watch_dir=Path(watch).expanduser() if self.watch_on.isChecked() and watch else None,
             confirm_add=self.confirm_add.isChecked(),
             close_to_tray=self.close_to_tray.isChecked(),

@@ -69,6 +69,8 @@ class Config:
     peer_countries: bool = True  # flags in the Peers tab (monthly db-ip.com download)
     confirm_add: bool = True  # show the add dialog (save folder, files) before adding
     prevent_sleep: bool = True  # keep the computer awake while something is downloading
+    check_updates: bool = True  # ask GitHub once a day whether there's a newer release
+    skipped_version: str = ""  # "Skip this version": don't mention this one again
 
 
 # Not exported by the 2.0 Python bindings (peer_info::utp_socket is bit 17).
