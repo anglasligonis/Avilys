@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Avilys
+GenericName=BitTorrent Client
+GenericName[lt]=BitTorrent klientas
+Comment=Download and share files with BitTorrent
+Comment[lt]=Atsisiųskite ir dalinkitės failais per BitTorrent
+Exec=avilys %U
+Icon=avilys
+Terminal=false
+Categories=Network;FileTransfer;P2P;Qt;
+MimeType=x-scheme-handler/magnet;application/x-bittorrent;
+StartupWMClass=avilys

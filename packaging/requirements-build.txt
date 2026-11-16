@@ -1,0 +1,5 @@
+# Exact versions the installers are built and tested with.
+libtorrent==2.0.15
+PySide6-Essentials==6.12.0
+pyinstaller==6.22.3
+maxminddb==3.2.0

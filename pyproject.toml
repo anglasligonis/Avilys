@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "avilys"
+version = "1.1.0"
+description = "A small BitTorrent client built on libtorrent: torrents, magnets, DHT, uTP, encryption, seeding."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["libtorrent>=2.0.15,<2.1"]
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.6", "maxminddb>=2.6"]
+dev = ["pytest>=8", "PySide6-Essentials>=6.6", "maxminddb>=2.6", "mmdb-writer>=0.2"]
+
+[project.scripts]
+avilys = "avilys.cli:main"
+
+[project.gui-scripts]
+avilys-gui = "avilys.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"avilys.gui" = ["flags/*.png", "flags/LICENSE"]
+"avilys" = ["data/*.mmdb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

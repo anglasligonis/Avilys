@@ -1,0 +1,159 @@
+name: build
+
+on:
+  # main, release tags and pull requests. Branch pushes without a PR don't
+  # build (run it by hand with "Run workflow"), so a PR isn't built twice.
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Qt's runtime needs on Linux (bundled into the AppImage by PyInstaller)
+  QT_LINUX_DEPS: >-
+    libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3
+    libxcb-xkb1 libxcb-icccm4 libxcb-cursor0 libxcb-image0 libxcb-util1
+    libxcb-render-util0 libxcb-keysyms1 libxcb-randr0 libxcb-shape0 libxcb-xinerama0
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $QT_LINUX_DEPS
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+  windows:
+    needs: test
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install build tools
+        run: |
+          pip install -r packaging/requirements-build.txt
+          pip install --no-deps .
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(python -c 'import avilys; print(avilys.__version__)')" >> "$GITHUB_OUTPUT"
+      - run: python packaging/make_icons.py
+      - name: Bundle the country database (IP Geolocation by DB-IP)
+        run: python packaging/fetch_geoip.py
+      - run: pyinstaller packaging/avilys.spec --noconfirm
+      - name: Self-test the packaged app
+        shell: pwsh
+        env:
+          AVILYS_REQUIRE_GEOIP: "1"
+        run: |
+          $p = Start-Process -FilePath dist\avilys\avilys.exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress -y
+            $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          iscc /DAppVersion=${{ steps.version.outputs.version }} packaging\windows\avilys.iss
+      - name: Silent install, self-test, uninstall
+        shell: pwsh
+        env:
+          AVILYS_REQUIRE_GEOIP: "1"
+        run: |
+          $setup = Get-Item dist\avilys-*-setup.exe
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/TASKS=magnet,torrentfiles' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exit code $($p.ExitCode)" }
+          $exe = "$env:LOCALAPPDATA\Programs\Avilys\avilys.exe"
+          if (-not (Test-Path $exe)) { throw "not installed at $exe" }
+          $cmd = (Get-ItemProperty 'HKCU:\Software\Classes\magnet\shell\open\command').'(default)'
+          if ($cmd -notlike "*avilys.exe*") { throw "magnet handler not registered: $cmd" }
+          $reg = (Get-ItemProperty 'HKCU:\Software\RegisteredApplications').Avilys
+          if ($reg -ne 'Software\Avilys\Capabilities') { throw "not listed in Default apps: $reg" }
+          $p = Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installed app self-test failed: $($p.ExitCode)" }
+          $p = Start-Process -FilePath "$env:LOCALAPPDATA\Programs\Avilys\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstaller exit code $($p.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avilys-windows-installer
+          path: dist/avilys-*-setup.exe
+          if-no-files-found: error
+          retention-days: 7  # keep builds you want in tagged releases instead
+
+  linux:
+    needs: test
+    runs-on: ubuntu-22.04  # oldest supported glibc we build on = widest compatibility
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: sudo apt-get update && sudo apt-get install -y $QT_LINUX_DEPS desktop-file-utils xvfb
+      - name: Install build tools
+        run: |
+          pip install -r packaging/requirements-build.txt
+          pip install --no-deps .
+      - name: Version
+        id: version
+        run: echo "version=$(python -c 'import avilys; print(avilys.__version__)')" >> "$GITHUB_OUTPUT"
+      - run: python packaging/make_icons.py
+      - name: Bundle the country database (IP Geolocation by DB-IP)
+        run: python packaging/fetch_geoip.py
+      - run: pyinstaller packaging/avilys.spec --noconfirm
+      - name: Get appimagetool
+        run: |
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+      - run: packaging/linux/build-appimage.sh ${{ steps.version.outputs.version }} ./appimagetool
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+      - name: Self-test the AppImage on X11
+        run: xvfb-run -a dist/avilys-*-x86_64.AppImage --self-test
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          AVILYS_REQUIRE_GEOIP: "1"
+          QT_QPA_PLATFORM: xcb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avilys-linux-appimage
+          path: dist/avilys-*-x86_64.AppImage
+          if-no-files-found: error
+          retention-days: 7  # keep builds you want in tagged releases instead
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          # Notes are written by hand when the release is published.
