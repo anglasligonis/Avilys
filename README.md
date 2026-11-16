@@ -209,6 +209,42 @@ and file dialogs drawn by Windows, which follow the Windows language.
 
 See [ROADMAP.md](ROADMAP.md) for what comes next.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org).
+
+Windows installers are built from this repository's source by GitHub
+Actions (`.github/workflows/build.yml`) and signed only when a release is
+published. Nothing built on a personal computer is signed.
+
+Team roles:
+
+- **Authors and committers:** [anglasligonis](https://github.com/anglasligonis)
+- **Reviewers:** [anglasligonis](https://github.com/anglasligonis)
+- **Approvers** (who approve each signing request): [anglasligonis](https://github.com/anglasligonis)
+
+## Privacy
+
+Avilys has no accounts, no analytics and no telemetry, and it doesn't send
+anything about you or your computer to the authors. Settings, the torrent
+list and resume data stay in Avilys' folder on your computer.
+
+Avilys connects to the internet only for the following:
+
+- **BitTorrent:** to download and share the torrents you add, it connects
+  to other peers, to the torrents' trackers, and to the DHT network. These
+  can see your IP address, as with any BitTorrent client. Anonymous mode
+  (Settings → Privacy) stops telling them which program and version you
+  use; it does not hide your IP address.
+- **Your router and local network:** when UPnP / NAT-PMP is on, Avilys asks
+  your router to open its port, and local peer discovery looks for peers on
+  your own network. Both can be turned off in Settings → Connection.
+- **Country database:** about once a month, Avilys downloads DB-IP's free
+  country database from `download.db-ip.com`, to show peer countries. The
+  request contains only the file name and the word "Avilys". Turn off
+  **Show peer countries** in Settings → Privacy to stop it.
+
 ## Licence
 
 Avilys is released under the [MIT licence](LICENSE).
