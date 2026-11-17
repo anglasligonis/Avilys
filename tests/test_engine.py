@@ -44,7 +44,9 @@ def wait_for(eng: Engine, cond, timeout: float = 30.0, others=()) -> None:
             e.pump(0.1)
         if cond():
             return
-    raise AssertionError(f"timed out; events: {list(eng.events)}")
+    from conftest import trace_report
+
+    raise AssertionError(f"timed out; events: {list(eng.events)}\nwhat the engines saw:\n{trace_report()}")
 
 
 def transfer(tmp: Path, **overrides) -> int:

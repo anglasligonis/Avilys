@@ -32,7 +32,9 @@ def spin(app, cond, others=(), timeout=30.0):
         if cond():
             return
         time.sleep(0.02)
-    raise AssertionError("timed out")
+    from conftest import trace_report
+
+    raise AssertionError("timed out; what the engines saw:\n" + trace_report())
 
 
 def test_window_downloads_filters_and_removes(tmp_path):
