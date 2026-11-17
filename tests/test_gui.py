@@ -222,28 +222,38 @@ def test_the_socket_lives_where_only_this_user_can_reach_it(tmp_path, monkeypatc
     and receive every link opened. It goes in a private folder: the session's
     runtime folder, else our own folder in /tmp, else the state folder."""
     import stat
+    import tempfile
 
     from avilys.gui import single
 
-    runtime, tmp, state = tmp_path / "run", tmp_path / "tmp", tmp_path / "state"
-    runtime.mkdir(mode=0o700)
-    tmp.mkdir()
-    monkeypatch.setattr(single.tempfile, "gettempdir", lambda: str(tmp))
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
-    assert Path(single.server_name(state)).parent == runtime
-    assert single.server_name(state) != single.server_name(tmp_path / "other")
+    state = tmp_path / "state"
+    # A short temp folder, as on a real system (pytest's paths can be too long for a socket)
+    with tempfile.TemporaryDirectory(prefix="av", dir="/tmp") as short:
+        tmp = Path(short)
+        runtime = tmp / "run"
+        runtime.mkdir(mode=0o700)
+        monkeypatch.setattr(single.tempfile, "gettempdir", lambda: str(tmp))
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+        assert Path(single.server_name(state)).parent == runtime
+        assert single.server_name(state) != single.server_name(tmp_path / "other")
 
-    runtime.chmod(0o755)  # not private: not used
-    own = tmp / f"avilys-{os.getuid()}"
-    assert Path(single.server_name(state)).parent == own
-    assert stat.S_IMODE(own.stat().st_mode) == 0o700
+        runtime.chmod(0o755)  # not private: not used
+        own = tmp / f"avilys-{os.getuid()}"
+        assert Path(single.server_name(state)).parent == own
+        assert stat.S_IMODE(own.stat().st_mode) == 0o700
 
-    own.chmod(0o777)  # someone made "our" folder first, or loosened it: not used
-    monkeypatch.delenv("XDG_RUNTIME_DIR")
-    assert Path(single.server_name(state)).parent == state
+        own.chmod(0o777)  # someone made "our" folder first, or loosened it: not used
+        monkeypatch.delenv("XDG_RUNTIME_DIR")
+        assert Path(single.server_name(state)).parent == state
+
+    # When no private folder has a path short enough, still never a bare
+    # name: Qt would put that in the shared temp folder
+    deep = tmp_path / ("x" * 120) / "state"
+    assert Path(single.server_name(deep)).parent == deep
 
 
 def test_links_only_go_to_a_window_of_the_same_user(tmp_path, monkeypatch):
+    """(A real hand-off from another process is test_second_launch_hands_links_to_running_window.)"""
     from avilys.gui import single
 
     app = make_app([])
@@ -251,14 +261,12 @@ def test_links_only_go_to_a_window_of_the_same_user(tmp_path, monkeypatch):
     server = single.InstanceServer(name)
     got = []
     server.received.connect(got.append)
-    assert single.send_to_running(name, ["mine"], ack_ms=0)
-    spin(app, lambda: got)
     # As if another account were listening under this name
     monkeypatch.setattr(single, "server_is_ours", lambda sock: False)
     assert not single.send_to_running(name, ["magnet:?xt=urn:btih:" + "0" * 40], ack_ms=0)
     for _ in range(20):
         app.processEvents()
-    assert got == [["mine"]]
+    assert got == []
     server.close()
     server.deleteLater()
     spin(app, lambda: True)

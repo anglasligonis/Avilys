@@ -37,24 +37,22 @@ def private_dir(path: Path) -> bool:
     return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077
 
 
-def socket_dir(state_dir: Path) -> Path:
-    """A folder for the socket that no other user can write to (Unix)."""
+def socket_dirs(state_dir: Path):
+    """Folders for the socket that no other user can write to (Unix), best
+    first: the session's runtime folder, our own folder in the temp folder,
+    then the state folder (always ours, though its path may be long)."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and private_dir(Path(runtime)):
-        return Path(runtime)
+        yield Path(runtime)
     own = Path(tempfile.gettempdir()) / f"avilys-{os.getuid()}"
     try:
         own.mkdir(mode=0o700)
-    except FileExistsError:
+    except OSError:  # it exists (ours or someone else's), or no temp folder
         pass
-    except OSError:
-        own = None
-    if own is not None and private_dir(own):
-        return own
-    # Taken by someone else (or no temp folder): the state folder is ours,
-    # though its path may be too long for a socket.
+    if private_dir(own):
+        yield own
     Path(state_dir).mkdir(parents=True, exist_ok=True)
-    return Path(state_dir)
+    yield Path(state_dir)
 
 
 def server_name(state_dir: Path) -> str:
@@ -66,8 +64,11 @@ def server_name(state_dir: Path) -> str:
     name = f"avilys-{digest}"
     if sys.platform == "win32":
         return name
-    path = socket_dir(state_dir) / name
-    return str(path) if len(str(path)) <= MAX_UNIX_PATH else name
+    # Never a bare name: Qt would put it in the shared temp folder. If no
+    # private folder has a path short enough, listening fails and each launch
+    # opens its own window, which is safe.
+    paths = [str(d / name) for d in socket_dirs(state_dir)]
+    return next((p for p in paths if len(p) <= MAX_UNIX_PATH), paths[-1])
 
 
 # -- who is on the other end? ------------------------------------------------------
