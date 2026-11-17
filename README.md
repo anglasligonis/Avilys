@@ -268,6 +268,8 @@ Avilys is released under the [MIT licence](LICENSE).
   Settings → Privacy).
 - Flags are from [flag-icons](https://github.com/lipis/flag-icons) (MIT),
   pre-rendered to small images; see `src/avilys/gui/flags/LICENSE`.
+- Interface icons are drawn from [Lucide](https://lucide.dev) shapes (ISC); the
+  licence notice is in `src/avilys/gui/icons.py`.
 - The interface is built with [Qt for Python (PySide6)](https://doc.qt.io/qtforpython/).
 - The Windows installer's Lithuanian text is Inno Setup's user-contributed
   translation by Robertas Rimas; see `packaging/windows/Lithuanian.isl.LICENSE.txt`.

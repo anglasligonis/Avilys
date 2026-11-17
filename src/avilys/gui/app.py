@@ -13,15 +13,15 @@ import time
 from pathlib import Path
 
 import libtorrent as lt
-from PySide6.QtCore import QByteArray, QLocale, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QTranslator
+from PySide6.QtCore import QByteArray, QLocale, QPointF, QSize, Qt, QTimer, QTranslator
 from PySide6.QtGui import (
     QAction, QColor, QGuiApplication, QIcon, QKeySequence, QPainter, QPen, QPixmap,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
+    QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-    QMessageBox, QSizePolicy, QSplitter, QStyleFactory, QSystemTrayIcon, QTableView, QToolBar,
-    QToolButton, QVBoxLayout, QWidget,
+    QMessageBox, QSizePolicy, QSplitter, QSystemTrayIcon, QTableView, QToolBar,
+    QToolButton, QVBoxLayout, QWidget, QHBoxLayout,
 )
 
 from .. import __version__, config, display, i18n
@@ -34,9 +34,12 @@ from . import autostart, files, theme
 from .add_dialog import AddTorrentDialog
 from .details import DetailPane
 from .dialogs import SettingsDialog, confirm_remove, kib_box
+from .icons import icon
 from .updates import UpdateChecker
-from .models import FILTERS, FilterProxy, ProgressDelegate, TorrentModel, category, key
-from .widgets import SpeedHistory
+from .models import (
+    COUNT_ROLE, FILTERS, FilterDelegate, FilterProxy, NameDelegate, ProgressDelegate, TorrentModel, category, key,
+)
+from .widgets import DiskMeter, SpeedHistory
 
 S = lt.torrent_status.states
 
@@ -44,48 +47,6 @@ ENCRYPTION_STATUS = {"prefer": N_("Encryption: preferred"), "require": N_("Encry
                      "disable": N_("Encryption: off")}
 
 WINDOW_FILE = "window.json"  # size, position, column widths and sort order
-
-
-def icon(kind: str, color: str | None = None) -> QIcon:
-    """Small stroke icons drawn in code, so there are no image files to ship."""
-    color = color or theme.current["icon"]
-    pm = QPixmap(32, 32)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-    p.setPen(pen)
-    if kind == "add":
-        p.drawLine(16, 6, 16, 26)
-        p.drawLine(6, 16, 26, 16)
-    elif kind == "link":
-        p.drawRoundedRect(4, 11, 14, 10, 5, 5)
-        p.drawRoundedRect(14, 11, 14, 10, 5, 5)
-    elif kind == "play":
-        p.setBrush(QColor(color))
-        p.drawPolygon([QPoint(9, 6), QPoint(26, 16), QPoint(9, 26)])
-    elif kind == "pause":
-        p.setBrush(QColor(color))
-        p.drawRect(8, 7, 5, 18)
-        p.drawRect(19, 7, 5, 18)
-    elif kind == "trash":
-        p.drawLine(6, 9, 26, 9)
-        p.drawLine(12, 9, 12, 5)
-        p.drawLine(12, 5, 20, 5)
-        p.drawLine(20, 5, 20, 9)
-        p.drawPolyline([QPoint(8, 9), QPoint(10, 27), QPoint(22, 27), QPoint(24, 9)])
-    elif kind == "slow":  # a speedometer with the needle low
-        p.drawArc(QRectF(4, 7, 24, 24), 0, 180 * 16)
-        p.drawLine(16, 19, 9, 14)
-        p.setBrush(QColor(color))
-        p.drawEllipse(QPoint(16, 19), 2, 2)
-    elif kind == "settings":  # three sliders
-        for y, knob in ((8, 20), (16, 11), (24, 17)):
-            p.drawLine(5, y, 27, y)
-            p.setBrush(QColor(theme.current["window"]))
-            p.drawEllipse(QPoint(knob, y), 3, 3)
-    p.end()
-    return QIcon(pm)
 
 
 class MainWindow(QMainWindow):
@@ -113,6 +74,10 @@ class MainWindow(QMainWindow):
         self._build_tray()
         self._apply_icons()
         self._restore_layout()
+        # The state is shown under each name, so its own column stays hidden
+        # (its data still drives the filters and tests).
+        self.table.horizontalHeader().setSectionHidden(TorrentModel.STATUS, True)
+        self.table.setFocus()  # not the filter box: typing there hides torrents
 
         self.notifications: list[tuple[str, str]] = []  # (title, text), newest last
         self._was_downloading: set[str] = set()  # notify only when these finish
@@ -152,13 +117,11 @@ class MainWindow(QMainWindow):
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.addToolBar(tb)
         dpr = self.devicePixelRatioF()
-        logo = logo_pixmap(round(22 * dpr))
+        logo = logo_pixmap(round(24 * dpr))
         logo.setDevicePixelRatio(dpr)
         mark = QLabel()
         mark.setPixmap(logo)
-        mark.setStyleSheet("padding-left: 4px;")
-        title = QLabel("avilys  ")
-        title.setStyleSheet("font-weight: 600; font-size: 16px;")
+        title = QLabel("Avilys", objectName="wordmark")
         tb.addWidget(mark)
         tb.addWidget(title)
 
@@ -175,6 +138,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_add)
         tb.widgetForAction(self.act_add).setObjectName("primary")
         tb.addAction(self.act_magnet)
+        tb.widgetForAction(self.act_magnet).setObjectName("secondary")
         tb.addSeparator()
         for act in (self.act_resume, self.act_pause, self.act_remove):
             tb.addAction(act)
@@ -189,6 +153,7 @@ class MainWindow(QMainWindow):
         self.search = QLineEdit(placeholderText=tr("Filter torrents"))
         self.search.setAccessibleName(tr("Filter torrents"))
         self.search.setClearButtonEnabled(True)
+        self.search_icon = self.search.addAction(QIcon(), QLineEdit.LeadingPosition)
         tb.addWidget(self.search)
         tb.addAction(self.act_settings)
         btn = tb.widgetForAction(self.act_settings)
@@ -199,30 +164,33 @@ class MainWindow(QMainWindow):
     def _apply_icons(self) -> None:
         """(Re)draw toolbar and tray icons in the current theme's colours."""
         t = theme.current
-        self.act_add.setIcon(icon("add", t["primary_fg"]))
-        self.act_magnet.setIcon(icon("link"))
-        self.act_resume.setIcon(icon("play"))
-        self.act_pause.setIcon(icon("pause"))
+        self.act_add.setIcon(icon("plus", t["primary_fg"]))
+        self.act_magnet.setIcon(icon("link", t["icon"]))
+        self.act_resume.setIcon(icon("play", t["icon"]))
+        self.act_pause.setIcon(icon("pause", t["icon"]))
         self.act_remove.setIcon(icon("trash", t["danger"]))
-        self.act_settings.setIcon(icon("settings"))
-        self.slow_button.setIcon(icon("slow", theme.current["accent"] if self.engine.slow else None))
+        self.act_settings.setIcon(icon("settings", t["icon"]))
+        self.search_icon.setIcon(icon("search", t["placeholder"]))
+        self.slow_button.setIcon(icon("slow", t["accent"] if self.engine.slow else t["muted"], 14))
 
     def _build_body(self) -> None:
         self.filters = QListWidget(objectName="filters")
+        self.filters.setItemDelegate(FilterDelegate(self.filters))
+        self.filters.setMouseTracking(True)  # hover highlight
+        self.filters.setAccessibleName(tr("Status"))
         for name in FILTERS:
             item = QListWidgetItem(tr(name))
             item.setData(Qt.UserRole, name)
             self.filters.addItem(item)
         self.filters.setCurrentRow(0)
-        self.disk = QLabel()
-        self.disk.setProperty("role", "muted")
-        self.disk.setWordWrap(True)
-        self.disk.setContentsMargins(14, 0, 10, 0)
+        self.disk = DiskMeter()
         side = QWidget(objectName="sidebar")
         side.setAttribute(Qt.WA_StyledBackground, True)
-        side.setFixedWidth(200)
+        side.setFixedWidth(212)
         sl = QVBoxLayout(side)
         sl.setContentsMargins(0, 0, 0, 10)
+        sl.setSpacing(0)
+        sl.addWidget(QLabel(tr("Status").upper(), objectName="section"))
         sl.addWidget(self.filters, 1)
         sl.addWidget(self.disk)
 
@@ -238,7 +206,9 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setShowGrid(False)
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.verticalHeader().setDefaultSectionSize(46)  # name, and under it the state
+        self.table.setWordWrap(False)
+        self.table.setItemDelegateForColumn(0, NameDelegate(self.table))
         self.table.setItemDelegateForColumn(TorrentModel.PROGRESS, ProgressDelegate(self.table))
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
@@ -246,7 +216,7 @@ class MainWindow(QMainWindow):
         header.setHighlightSections(False)
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col, width in zip(range(1, 9), (80, 200, 140, 95, 95, 95, 80, 80)):
+        for col, width in zip(range(1, 9), (84, 180, 150, 96, 88, 92, 64, 88)):
             header.resizeSection(col, width)
         self.table.doubleClicked.connect(self._toggle_row)
 
@@ -257,6 +227,7 @@ class MainWindow(QMainWindow):
         split.addWidget(self.table)
         split.addWidget(self.details)
         split.setSizes([420, 300])
+        split.setHandleWidth(5)  # a 1px line (see the style sheet), easier to grab than it looks
         split.setChildrenCollapsible(False)
         self.split = split
 
@@ -283,7 +254,11 @@ class MainWindow(QMainWindow):
         self.lbl_transport = QLabel()
         self.lbl_enc = QLabel()
         self.lbl_counts = QLabel()
-        for w in (self.lbl_rates, self.lbl_dht, self.lbl_port, self.lbl_transport, self.lbl_enc):
+        sb.addWidget(self.lbl_rates)
+        for w in (self.lbl_dht, self.lbl_port, self.lbl_transport, self.lbl_enc):
+            rule = QFrame()
+            rule.setProperty("role", "vrule")
+            sb.addWidget(rule)
             sb.addWidget(w)
         self.slow_button = QToolButton()
         self.slow_button.setText(tr("Slow mode"))
@@ -407,7 +382,9 @@ class MainWindow(QMainWindow):
             name = item.data(Qt.UserRole)
             members = FILTERS[name]
             n = len(cats) if members is None else sum(c in members for c in cats)
-            item.setText(f"{tr(name)}  ·  {n}")
+            if item.data(COUNT_ROLE) != n:
+                item.setData(COUNT_ROLE, n)
+            item.setHidden(name == "Errors" and n == 0 and not item.isSelected())
 
         down = sum(s.download_payload_rate for s in statuses)
         up = sum(s.upload_payload_rate for s in statuses)
@@ -451,9 +428,10 @@ class MainWindow(QMainWindow):
         try:
             usage = shutil.disk_usage(cfg.save_path)
             free = tr("{free} free of {total}", free=display.size(usage.free), total=display.size(usage.total))
+            used = 1 - usage.free / usage.total if usage.total else None
         except OSError:
-            free = ""
-        self.disk.setText(f"{short_path(cfg.save_path)}\n{free}")
+            free, used = "", None
+        self.disk.set_usage(short_path(cfg.save_path, 200), used, free)  # the meter elides it to fit
         self.disk.setToolTip(str(cfg.save_path))
         if self.engine.events:
             self.statusBar().setToolTip("\n".join(self.engine.events))
@@ -931,7 +909,8 @@ def make_app(argv=None, theme_choice: str = "system", language: str = "en") -> Q
     app.setApplicationVersion(__version__)
     app.setDesktopFileName("avilys")  # matches avilys.desktop on Linux
     app.setWindowIcon(app_icon())
-    app.setStyle(QStyleFactory.create("Fusion"))
+    app.setStyle(theme.Style("Fusion"))
+    app.setFont(theme.ui_font(app.font()))
     theme.apply(app, theme_choice)
     return app
 

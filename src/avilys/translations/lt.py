@@ -281,11 +281,13 @@ STRINGS = {
     'Built on <a href="https://libtorrent.org">libtorrent</a> and '
     '<a href="https://doc.qt.io/qtforpython/">Qt for Python</a>.<br>'
     'IP Geolocation by <a href="https://db-ip.com">DB-IP</a> (CC BY 4.0). '
-    'Flags from <a href="https://github.com/lipis/flag-icons">flag-icons</a> (MIT).':
+    'Flags from <a href="https://github.com/lipis/flag-icons">flag-icons</a> (MIT). '
+    'Icons from <a href="https://lucide.dev">Lucide</a> (ISC).':
         'Sukurta naudojant <a href="https://libtorrent.org">libtorrent</a> ir '
         '<a href="https://doc.qt.io/qtforpython/">Qt for Python</a>.<br>'
         'IP geografinė vieta: <a href="https://db-ip.com">DB-IP</a> (CC BY 4.0). '
-        'Vėliavos iš <a href="https://github.com/lipis/flag-icons">flag-icons</a> (MIT).',
+        'Vėliavos iš <a href="https://github.com/lipis/flag-icons">flag-icons</a> (MIT). '
+        'Piktogramos iš <a href="https://lucide.dev">Lucide</a> (ISC).',
     "A BitTorrent client. “Avilys” is Lithuanian for beehive.": "BitTorrent klientas, pavadintas bičių avilio garbei.",
     "Poem: {title}, {author}": "Eilėraštis: {title}, {author}",
     "Version {version}": "Versija {version}",
