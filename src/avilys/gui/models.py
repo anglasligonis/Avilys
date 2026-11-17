@@ -11,6 +11,7 @@ from .. import display
 from ..engine import error_text, has_error, is_stopped, share_ratio
 from ..i18n import N_, num, tr
 from . import icons, theme
+from .widgets import plain_text
 
 # Each category's colour comes from the current theme under this key.
 STATE_KEYS = {
@@ -185,9 +186,9 @@ class TorrentModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole and col not in (0, 2, 3):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         if role == Qt.ToolTipRole and cat == "Error":
-            return f"{st.name}\n{self.explain(st)}"
+            return plain_text(f"{st.name}\n{self.explain(st)}")
         if role == Qt.ToolTipRole and col == 0:
-            return st.name
+            return plain_text(st.name)
         return None
 
 

@@ -44,7 +44,7 @@ pip install -e '.[gui]'        # desktop window; use '.[dev]' for tests too
 ### Building the installers yourself
 
 ```bash
-pip install -r packaging/requirements-build.txt && pip install --no-deps .
+pip install -r packaging/requirements-build.txt && pip install --no-deps --no-build-isolation .
 python packaging/make_icons.py                  # icon drawn in code -> .png / .ico
 pyinstaller packaging/avilys.spec --noconfirm  # -> dist/avilys/
 ```

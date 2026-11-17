@@ -8,6 +8,7 @@ import re
 import urllib.request
 from dataclasses import dataclass
 
+from . import net
 from .i18n import tr
 
 RELEASES_PAGE = "https://github.com/anglasligonis/Avilys/releases"
@@ -36,12 +37,13 @@ def is_newer(latest: str, current: str) -> bool:
     return a + (0,) * (width - len(a)) > b + (0,) * (width - len(b))
 
 
-def fetch_latest(url: str = LATEST_API, timeout: float = 15) -> Release:
-    """The newest published release. Raises RuntimeError if it can't be found."""
+def fetch_latest(url: str = LATEST_API, timeout: float = 15, source_address: str | None = None) -> Release:
+    """The newest published release. Raises RuntimeError if it can't be found.
+    source_address: send from this address (the adapter Avilys is bound to)."""
     req = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json", "User-Agent": "Avilys"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with net.urlopen(req, timeout, source_address) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:  # offline, blocked, rate-limited, no releases yet
         raise RuntimeError(str(e)) from None

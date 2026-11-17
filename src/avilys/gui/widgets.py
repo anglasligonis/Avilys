@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import html
 from collections import deque
 from functools import lru_cache
 from pathlib import Path
 
+from PySide6 import QtGui
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QSizePolicy, QWidget
@@ -13,6 +15,16 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 from .. import display
 from ..i18n import tr
 from . import icons, theme
+
+
+def plain_text(text: str) -> str:
+    """Text for a tooltip or message box, which Qt shows as HTML whenever it
+    looks like HTML. Torrent and file names come from whoever made the
+    torrent (or the web page with the magnet link), so they are escaped
+    instead of drawn as markup. Ordinary text comes back unchanged."""
+    if not QtGui.Qt.mightBeRichText(text):  # PySide6 has it on QtGui's Qt only
+        return text
+    return "<p style='white-space:pre-wrap'>" + html.escape(text) + "</p>"
 
 FLAGS = Path(__file__).resolve().parent / "flags"
 HISTORY = 300  # seconds of speed history (5 minutes)

@@ -33,13 +33,13 @@ from ..update import RELEASES_PAGE, Release, is_newer
 from . import autostart, files, theme
 from .add_dialog import AddTorrentDialog
 from .details import DetailPane
-from .dialogs import SettingsDialog, confirm_remove, kib_box
+from .dialogs import SettingsDialog, adapter_address, confirm_remove, kib_box
 from .icons import icon
 from .updates import UpdateChecker
 from .models import (
     COUNT_ROLE, FILTERS, FilterDelegate, FilterProxy, NameDelegate, ProgressDelegate, TorrentModel, category, key,
 )
-from .widgets import DiskMeter, SpeedHistory
+from .widgets import DiskMeter, SpeedHistory, plain_text
 
 S = lt.torrent_status.states
 
@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
             self.engine.log(trn("resumed {n} torrent", "resumed {n} torrents", resumed))
         self.geo = GeoIP(cfg.state_dir)
         if cfg.peer_countries and self.geo.needs_update():
-            self.geo.update_in_background(self.engine.log)
+            self._update_countries(cfg)
         self.total_speed = SpeedHistory()
         self.speeds: dict[str, SpeedHistory] = {}
         self._file_pickers: list[AddTorrentDialog] = []
@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
             t.start()
 
         self.updates = UpdateChecker(self)
+        self.updates.source = lambda: adapter_address(self.cfg.interface)
         self.updates.finished.connect(self._update_checked)
         self.update_box: QMessageBox | None = None  # the "new version" pop-up, while open
         self._pending_update: Release | None = None  # found while hidden in the tray
@@ -434,7 +435,7 @@ class MainWindow(QMainWindow):
         self.disk.set_usage(short_path(cfg.save_path, 200), used, free)  # the meter elides it to fit
         self.disk.setToolTip(str(cfg.save_path))
         if self.engine.events:
-            self.statusBar().setToolTip("\n".join(self.engine.events))
+            self.statusBar().setToolTip(plain_text("\n".join(self.engine.events)))  # names, tracker replies
 
     def _notify_finished(self, statuses) -> None:
         """Tell the user when something we saw downloading has finished.
@@ -670,7 +671,7 @@ class MainWindow(QMainWindow):
 
     def _report(self, errors: list[str]) -> None:
         if errors:
-            QMessageBox.warning(self, tr("Couldn't add"), "\n\n".join(errors))
+            QMessageBox.warning(self, tr("Couldn't add"), plain_text("\n\n".join(errors)))
 
     def add_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -719,11 +720,20 @@ class MainWindow(QMainWindow):
             config.save(new)
             self.details.show_countries = new.peer_countries
             if new.peer_countries and self.geo.needs_update():
-                self.geo.update_in_background(self.engine.log)
+                self._update_countries(new)
             if theme_changed:
                 self.apply_theme()
             self._apply_icons()
             self.refresh()
+
+    def _update_countries(self, cfg: Config) -> None:
+        """Fetch this month's country database, through the chosen adapter only."""
+        try:
+            source = adapter_address(cfg.interface)
+        except OSError as e:
+            self.engine.log(tr("country database update failed: {error}", error=e))
+            return
+        self.geo.update_in_background(self.engine.log, source)
 
     # -- update check ---------------------------------------------------------
     def check_for_updates(self, manual: bool = False) -> None:
@@ -739,7 +749,7 @@ class MainWindow(QMainWindow):
         if release is None:
             if manual:
                 QMessageBox.warning(QApplication.activeWindow() or self, tr("Check for updates"),
-                                    tr("Couldn't check for updates: {error}", error=error))
+                                    plain_text(tr("Couldn't check for updates: {error}", error=error)))
             else:
                 self.engine.log(tr("update check failed: {error}", error=error))
             return

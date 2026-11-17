@@ -57,6 +57,7 @@ class AddTorrentDialog(QDialog):
         layout.setSpacing(10)
 
         name = QLabel(params_name(atp))
+        name.setTextFormat(Qt.PlainText)  # the name is the torrent maker's text
         name.setWordWrap(True)
         name.setTextInteractionFlags(Qt.TextSelectableByMouse)
         name.setProperty("role", "title")
@@ -96,6 +97,7 @@ class AddTorrentDialog(QDialog):
             layout.addWidget(self.choose_box)
 
         self.footer = QLabel()
+        self.footer.setTextFormat(Qt.PlainText)
         layout.addWidget(self.footer)
         self.dont_ask = QCheckBox(tr("Don't show this again (you can turn it back on in Settings)"))
         layout.addWidget(self.dont_ask)
