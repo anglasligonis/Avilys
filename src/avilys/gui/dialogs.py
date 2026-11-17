@@ -18,6 +18,7 @@ from ..config import listen_on, port_of
 from . import associations, autostart
 from ..engine import Config
 from ..i18n import LANGUAGES, N_, tr, trn
+from ..net import AdapterNotConnected
 
 THEME_LABELS = [("system", N_("Same as system")), ("light", N_("Light")), ("dark", N_("Dark"))]
 
@@ -50,6 +51,37 @@ def network_interfaces() -> list[tuple[str, str]]:
             value = iface.name()
         out.append((value, f"{iface.humanReadableName()} ({', '.join(v4) or tr('IPv6 only')})"))
     return out
+
+
+def adapter_address(interface: str | None) -> str | None:
+    """The address to send Avilys's own web requests from, so they leave
+    through the adapter chosen in Settings like the transfers do. None when no
+    adapter is chosen (any route). Raises AdapterNotConnected when it is
+    chosen but down: the request must then not be made at all."""
+    import ipaddress
+
+    from PySide6.QtNetwork import QAbstractSocket, QNetworkInterface
+
+    if not interface:
+        return None
+    try:  # Windows binds by address
+        ipaddress.ip_address(interface)
+        wanted = interface
+    except ValueError:
+        wanted = None
+    for iface in QNetworkInterface.allInterfaces():
+        if not iface.flags() & QNetworkInterface.IsUp or (wanted is None and iface.name() != interface):
+            continue
+        ips = [e.ip() for e in iface.addressEntries() if not e.ip().isLinkLocal()]
+        texts = [ip.toString() for ip in ips]
+        if wanted is not None:
+            if wanted in texts:
+                return wanted
+            continue
+        v4 = [t for ip, t in zip(ips, texts) if ip.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol]
+        if v4 or texts:
+            return (v4 or texts)[0]
+    raise AdapterNotConnected(tr("network adapter {name} isn't connected", name=interface))
 
 
 def folder_row(edit: QLineEdit, parent, title: str, files: str | None = None, clearable: bool = False) -> QWidget:
@@ -446,6 +478,7 @@ def confirm_remove(parent, names: list[str]) -> tuple[bool, bool]:
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Question)
     box.setWindowTitle(tr("Remove torrents"))
+    box.setTextFormat(Qt.PlainText)  # shows the torrent's name
     if len(names) == 1:
         box.setText(tr("Remove “{name}” from the list?", name=names[0]))
     else:

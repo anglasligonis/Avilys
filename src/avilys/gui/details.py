@@ -19,7 +19,7 @@ from ..engine import UTP_SOCKET, share_ratio
 from ..i18n import N_, num, tr, trn
 from . import files
 from .add_dialog import display_path, real_files
-from .widgets import PieceBar, SpeedGraph, flag_icon
+from .widgets import PieceBar, SpeedGraph, flag_icon, plain_text
 
 RIGHT = Qt.AlignRight | Qt.AlignVCenter
 
@@ -136,6 +136,7 @@ class DetailPane(QTabWidget):
         er = QHBoxLayout(self.error_row)
         er.setContentsMargins(0, 0, 0, 4)
         self.error = QLabel()
+        self.error.setTextFormat(Qt.PlainText)  # names a file from the torrent
         self.error.setProperty("role", "warning")
         self.error.setWordWrap(True)
         self.error.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -153,6 +154,7 @@ class DetailPane(QTabWidget):
             label = QLabel(tr(name))
             label.setProperty("role", "muted")
             value = QLabel("–")
+            value.setTextFormat(Qt.PlainText)  # name, comment, creator: the torrent maker's text
             value.setTextInteractionFlags(Qt.TextSelectableByMouse)
             grid.addWidget(label, row, col * 2)
             grid.addWidget(value, row, col * 2 + 1)
@@ -233,7 +235,7 @@ class DetailPane(QTabWidget):
         where = st.save_path if str(dest) == st.save_path else tr(
             "{folder} (moves to {destination} when finished)", folder=st.save_path, destination=dest)
         f["Save path"].setText(where)
-        f["Save path"].setToolTip(where)  # long paths don't fit
+        f["Save path"].setToolTip(plain_text(where))  # long paths don't fit
         f["Size"].setText(display.size(st.total_wanted) if st.has_metadata else tr("unknown yet"))
         f["Downloaded"].setText(tr("{size} (all time {total})", size=display.size(st.total_wanted_done),
                                    total=display.size(st.all_time_download)))
@@ -306,9 +308,9 @@ class DetailPane(QTabWidget):
         if not path.exists():
             skipped = self.handle.get_file_priorities()[self._file_rows[row]] == 0
             QMessageBox.information(
-                self, tr("Not downloaded yet"),
-                tr("“{name}” is set to “Don't download”.", name=path.name) if skipped else
-                tr("“{name}” hasn't been downloaded yet.", name=path.name))
+                self, tr("Not downloaded yet"), plain_text(
+                    tr("“{name}” is set to “Don't download”.", name=path.name) if skipped else
+                    tr("“{name}” hasn't been downloaded yet.", name=path.name)))
             return
         self.opener(path)
 
@@ -395,7 +397,7 @@ class DetailPane(QTabWidget):
             except ValueError as e:
                 errors.append(str(e))
         if errors:
-            QMessageBox.warning(self, tr("Couldn't add"), "\n".join(errors))
+            QMessageBox.warning(self, tr("Couldn't add"), plain_text("\n".join(errors)))
         self.refresh()
 
     def remove_trackers(self, urls: list[str]) -> None:

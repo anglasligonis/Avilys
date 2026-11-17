@@ -44,7 +44,9 @@ def wait_for(eng: Engine, cond, timeout: float = 30.0, others=()) -> None:
             e.pump(0.1)
         if cond():
             return
-    raise AssertionError(f"timed out; events: {list(eng.events)}")
+    from conftest import trace_report
+
+    raise AssertionError(f"timed out; events: {list(eng.events)}\nwhat the engines saw:\n{trace_report()}")
 
 
 def transfer(tmp: Path, **overrides) -> int:
@@ -591,3 +593,55 @@ def test_anonymous_mode_hides_the_client(tmp_path):
     s = eng.ses.get_settings()
     assert not s["anonymous_mode"] and s["peer_fingerprint"] == FINGERPRINT
     eng.shutdown()
+
+
+def test_mark_of_the_web_format(tmp_path):
+    from avilys.engine import mark_downloaded
+
+    f = tmp_path / "setup.exe"
+    f.write_bytes(b"MZ")
+    assert not mark_downloaded(f, windows=False)
+    # On Windows this is an alternate data stream of the file; elsewhere the
+    # same name is an ordinary file, which is enough to check what is written.
+    assert mark_downloaded(f, windows=True)
+    with open(f"{f}:Zone.Identifier", newline="") as zone:
+        assert zone.read() == "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=about:internet\r\n"
+    assert f.read_bytes() == b"MZ"  # the file itself is untouched
+
+
+def test_finished_files_are_marked_as_downloaded(tmp_path):
+    """Every file of a torrent is marked once complete, so Windows warns before
+    a downloaded program runs; files not downloaded are left alone."""
+    seeder, leecher, tfile = seeding_pair(tmp_path, files={"song.flac": 300_000, "setup.exe": 200_000,
+                                                          "skipped.txt": 100_000})
+    marked = []
+    leecher.marker = lambda path: marked.append(Path(path).name) or True
+    atp = lt.add_torrent_params()
+    atp.ti = lt.torrent_info(str(tfile))
+    fs = atp.ti.files()
+    names = [Path(fs.file_path(i)).name for i in range(fs.num_files())]
+    atp.file_priorities = [0 if n == "skipped.txt" else 4 for n in names]
+    key = leecher.add_params(atp)
+    wait_for(leecher, lambda: key in leecher.handles, others=[seeder])
+    h = leecher.handles[key]
+    h.connect_peer(("127.0.0.1", seeder.ses.listen_port()))
+    wait_for(leecher, lambda: h.status().is_finished and {"song.flac", "setup.exe"} <= set(marked),
+             others=[seeder])
+    assert "skipped.txt" not in marked and not any(n.startswith(".pad") for n in marked)
+    leecher.shutdown()
+    seeder.shutdown()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Mark of the Web is a Windows (NTFS) feature")
+def test_downloads_carry_the_mark_of_the_web_on_windows(tmp_path):
+    seeder, leecher, tfile = seeding_pair(tmp_path, size=256 * 1024)
+    leecher.add(str(tfile))
+    wait_for(leecher, lambda: leecher.handles, others=[seeder])
+    (h,) = leecher.handles.values()
+    h.connect_peer(("127.0.0.1", seeder.ses.listen_port()))
+    zone = Path(h.status().save_path) / "payload.bin:Zone.Identifier"
+    wait_for(leecher, lambda: h.status().is_seeding and os.path.exists(zone), others=[seeder])
+    with open(zone) as f:
+        assert "ZoneId=3" in f.read()
+    leecher.shutdown()
+    seeder.shutdown()

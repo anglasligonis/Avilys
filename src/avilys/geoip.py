@@ -15,6 +15,7 @@ import urllib.request
 from functools import lru_cache
 from pathlib import Path
 
+from . import net
 from .i18n import tr
 
 try:
@@ -95,15 +96,16 @@ class GeoIP:
         age = self.age_days()
         return maxminddb is not None and (age is None or age > MAX_AGE_DAYS)
 
-    def update_in_background(self, log=lambda msg: None) -> None:
-        """Download this month's database in a thread, then switch to it."""
+    def update_in_background(self, log=lambda msg: None, source_address: str | None = None) -> None:
+        """Download this month's database in a thread, then switch to it.
+        source_address: send from this address (the adapter Avilys is bound to)."""
         if self.updating or maxminddb is None:
             return
         self.updating = True
 
         def work():
             try:
-                download(self.downloaded)
+                download(self.downloaded, source_address=source_address)
                 self.reload()
                 log(tr("country database updated"))
             except Exception as e:  # offline, blocked, or not published yet
@@ -121,7 +123,7 @@ def months_to_try(now: time.struct_time | None = None) -> list[str]:
     return [f"{now.tm_year}-{now.tm_mon:02d}", f"{prev_year}-{prev_month:02d}"]
 
 
-def download(dest: Path, timeout: float = 60) -> Path:
+def download(dest: Path, timeout: float = 60, source_address: str | None = None) -> Path:
     """Fetch and unpack the newest database to `dest`, replacing it atomically."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -129,7 +131,7 @@ def download(dest: Path, timeout: float = 60) -> Path:
     for month in months_to_try():
         req = urllib.request.Request(URL.format(month=month), headers={"User-Agent": "Avilys"})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with net.urlopen(req, timeout, source_address) as resp:
                 data = gzip.decompress(resp.read())
         except Exception as e:
             last_error = e
