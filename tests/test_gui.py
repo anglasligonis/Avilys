@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -44,7 +45,7 @@ def test_window_downloads_filters_and_removes(tmp_path):
     everyone = lt.ip_filter()
     everyone.add_rule("0.0.0.0", "255.255.255.255", 1 << seeder.ses.global_peer_class_id)
     seeder.ses.set_peer_class_filter(everyone)
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     spin(app, lambda: seeder.handles and seeder.statuses()[0].is_seeding, [seeder])
 
     win = MainWindow(gui_config(tmp_path))
@@ -98,11 +99,12 @@ def test_window_downloads_filters_and_removes(tmp_path):
 
     # Remove keeps files unless asked
     resume = cfg.state_dir / "torrents"
+    download = Path(h.status().save_path) / "payload.bin"
     win.remove_selected(ask=False)
     spin(app, lambda: win.model.rowCount() == 0)
     win.engine.pump(0.5)
     assert list(resume.glob("*.resume")) == []
-    assert (cfg.save_path / "payload.bin").exists()
+    assert download.exists()
 
     win.quit()
     seeder.shutdown()
@@ -110,7 +112,7 @@ def test_window_downloads_filters_and_removes(tmp_path):
 
 def gui_config(tmp_path, **changes) -> Config:
     base = dict(state_dir=tmp_path / "gui" / "state", save_path=tmp_path / "gui" / "data",
-                listen="127.0.0.1:0", dht=False, lsd=False, port_mapping=False,
+                listen="127.0.0.1:0", dht=False, lsd=False, port_mapping=False, allow_local_network=True,
                 close_to_tray=False, confirm_add=False,
                 prevent_sleep=False,   # never touch the machine's real sleep settings
                 check_updates=False,   # no requests to GitHub from tests
@@ -161,7 +163,7 @@ def test_add_dialog_chooses_files_and_folder(tmp_path):
     (h,) = win.engine.handles.values()
     prios = h.get_file_priorities()
     assert [prios[i] for i in files] == [0 if i == cover else 4 for i in files]
-    assert h.status().save_path == str(tmp_path / "Music")
+    assert Path(h.status().save_path).parent == tmp_path / "Music"
 
     # The Files tab hides padding files too, and maps rows to the right files
     win.table.selectRow(0)
@@ -270,7 +272,7 @@ def throttled_seeder(tmp_path, tfile, rate=2 * 1024 * 1024):
     everyone = lt.ip_filter()
     everyone.add_rule("0.0.0.0", "255.255.255.255", 1 << seeder.ses.global_peer_class_id)
     seeder.ses.set_peer_class_filter(everyone)
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     return seeder
 
 
@@ -341,7 +343,7 @@ def test_magnet_file_picker(tmp_path):
     # libtorrent applies priorities in the background
     spin(app, lambda: (lambda p: p[keep] == 4 and p[skip] == 0)(h.get_file_priorities()), [seeder])
     spin(app, lambda: (win.refresh(), h.status().is_finished)[1], [seeder])
-    assert (win.cfg.save_path / "pack" / "keep.bin").stat().st_size == 300_000
+    assert (Path(h.status().save_path) / "pack" / "keep.bin").stat().st_size == 300_000
     win.quit()
     seeder.shutdown()
 
@@ -422,7 +424,7 @@ def test_files_tab_opens_and_reveals_files(tmp_path, monkeypatch):
     # A complete multi-file torrent already sitting in the save folder
     tfile = make_folder_torrent(cfg.save_path, tmp_path / "album.torrent")
     win = MainWindow(cfg)
-    win.add_sources([str(tfile)])
+    win.engine.add(str(tfile), reuse_existing=True)
     spin(app, lambda: (win.refresh(), win.model.rowCount() == 1 and win.engine.statuses()[0].is_seeding)[1])
     win.table.selectRow(0)
     win.details.setCurrentWidget(win.details.files)
@@ -621,13 +623,13 @@ def test_torrent_errors_are_shown_and_can_be_retried(tmp_path):
     seed_dir.mkdir(parents=True)
     tfile = make_torrent(seed_dir, tmp_path / "t.torrent", size=256 * 1024)
     seeder = engine(tmp_path, "seeder")
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     spin(app, lambda: seeder.handles and seeder.statuses()[0].is_seeding, [seeder])
 
     win = MainWindow(gui_config(tmp_path))
     blocker = win.cfg.save_path / "payload.bin"  # a folder sits where the file belongs
     blocker.mkdir()
-    assert win.add_sources([str(tfile)]) == []
+    win.engine.add(str(tfile), reuse_existing=True)
     spin(app, lambda: win.engine.handles, [seeder])
     (h,) = win.engine.handles.values()
     h.connect_peer(("127.0.0.1", seeder.ses.listen_port()))  # Windows only notices once data arrives

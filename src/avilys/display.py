@@ -18,6 +18,13 @@ STATE_NAMES = {
     lt.torrent_status.states.seeding: "seeding",
 }
 
+CONTROL_CHARS = {code: f"\\x{code:02x}" for code in (*range(32), *range(127, 160))}
+
+
+def terminal_text(text: str) -> str:
+    """Render terminal control characters as visible escape sequences."""
+    return text.translate(CONTROL_CHARS)
+
 
 def size(n: float) -> str:
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -66,7 +73,7 @@ HEADER = f"{'NAME':<32} {'STATE':<9} {'PROGRESS':<27} {'DOWN':>11} {'UP':>11} {'
 
 
 def row(st: lt.torrent_status) -> str:
-    name = st.name or str(st.info_hashes.get_best())[:16]
+    name = terminal_text(st.name) if st.name else str(st.info_hashes.get_best())[:16]
     if len(name) > 32:
         name = name[:31] + "…"
     progress = f"{bar(st.progress)} {st.progress * 100:5.1f}%"
@@ -83,8 +90,8 @@ def render(statuses: list[lt.torrent_status], events, footer: str = "") -> str:
     total_down = sum(s.download_payload_rate for s in statuses)
     total_up = sum(s.upload_payload_rate for s in statuses)
     lines.append("")
-    lines.append(f"total ↓ {rate(total_down)}  ↑ {rate(total_up)}   {footer}")
+    lines.append(f"total ↓ {rate(total_down)}  ↑ {rate(total_up)}   {terminal_text(footer)}")
     if events:
         lines.append("")
-        lines += list(events)
+        lines += [terminal_text(event) for event in events]
     return "\n".join(lines)

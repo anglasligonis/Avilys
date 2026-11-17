@@ -8,9 +8,11 @@ import gzip
 import ipaddress
 import os
 import sys
+import tempfile
 import time
 from collections import deque
 from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
 
 import libtorrent as lt
@@ -60,6 +62,7 @@ class Config:
     alt_from: str = "08:00"
     alt_to: str = "23:00"
     interface: str | None = None  # bind to this network interface (e.g. a VPN adapter)
+    allow_local_network: bool = False  # allow non-public tracker, web seed and peer addresses
     blocklist: Path | None = None  # IP blocklist file (P2P, DAT or CIDR lines; may be .gz)
     anonymous: bool = False  # don't tell peers and trackers which client and version this is
     # Desktop-window preferences (the engine ignores these)
@@ -85,6 +88,23 @@ PEERS_METRIC = lt.find_metric_idx("peer.num_peers_connected")
 # Our own key in a torrent's resume file: where its files go once it finishes
 # (set while they are still in the folder for unfinished downloads).
 DEST_KEY = b"avilys-destination"
+CHOOSE_KEY = b"avilys-choose-files"
+
+# Libtorrent uses the same IP filter for resolved trackers, web seeds and peers.
+# Include IPv4-mapped and translation prefixes to cover alternate spellings.
+LOCAL_NETWORKS = tuple(map(ipaddress.ip_network, (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+    "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16",
+    "198.18.0.0/15", "224.0.0.0/3", "::/96", "::ffff:0:0/96",
+    "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16",
+    "fc00::/7", "fe80::/9", "ff00::/8",
+)))
+
+
+class FileChoice(Enum):
+    WAITING = auto()
+    READY = auto()
+    APPLYING = auto()
 
 # After this long connected to peers with none connecting to us, say so.
 UNREACHABLE_AFTER = 180.0
@@ -189,13 +209,14 @@ def build_settings(cfg: Config, slow: bool = False) -> dict:
         "outgoing_interfaces": cfg.interface or "",
         "alert_mask": int(ALERT_MASK),
         "enable_dht": cfg.dht,
-        "enable_lsd": cfg.lsd,
+        "enable_lsd": cfg.lsd and cfg.allow_local_network,
         "enable_upnp": cfg.port_mapping,
         "enable_natpmp": cfg.port_mapping,
         "enable_outgoing_utp": cfg.utp,
         "enable_incoming_utp": cfg.utp,
         "enable_outgoing_tcp": cfg.tcp,
         "enable_incoming_tcp": cfg.tcp,
+        "apply_ip_filter_to_trackers": True,
         "out_enc_policy": int(policy),
         "in_enc_policy": int(policy),
         "allowed_enc_level": int(level),
@@ -291,6 +312,13 @@ def already_added(atp: lt.add_torrent_params) -> str:
     return tr("“{name}” is already in your list", name=params_name(atp))
 
 
+def new_download_folder(parent: Path, key: str) -> Path:
+    """Reserve a directory exclusively, including across Avilys processes."""
+    parent = parent.expanduser().resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"Avilys-{key[:8]}-", dir=parent))
+
+
 class Engine:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -322,24 +350,24 @@ class Engine:
         self.blocked_ranges = 0
         if self.slow:
             self.ses.apply_settings(build_settings(cfg, True))
-        if cfg.blocklist:
-            self.load_blocklist()
+        self.load_blocklist()
         self.port_mapped = False
         self._pending_saves = 0
-        self._removed: set[str] = set()  # keys whose late resume data must be dropped
         self._adding: set[str] = set()   # added, waiting for add_torrent_alert
-        self._choose_files: set[str] = set()  # magnets whose files the user picks on arrival
+        self._file_choices: dict[str, FileChoice] = {}
+        self._old_resume_names: dict[str, str] = {}  # a v1 magnet can acquire a v2 info hash
         self.files_ready: list[str] = []  # metadata arrived for these; the UI shows a file picker
 
     def apply_config(self, cfg: Config) -> None:
         """Change settings while running (save_path affects new torrents)."""
         cfg.save_path.mkdir(parents=True, exist_ok=True)
-        old_blocklist = self.cfg.blocklist
+        reload_filter = (cfg.blocklist != self.cfg.blocklist
+                         or cfg.allow_local_network != self.cfg.allow_local_network)
         self.cfg = cfg
         self.slow = self._want_slow()
-        self.ses.apply_settings(build_settings(cfg, self.slow))
-        if cfg.blocklist != old_blocklist:
+        if reload_filter:
             self.load_blocklist()
+        self.ses.apply_settings(build_settings(cfg, self.slow))
 
     # -- slow mode (alternative speed limits) ---------------------------------
     def _want_slow(self) -> bool:
@@ -357,8 +385,11 @@ class Engine:
 
     # -- IP blocklist -----------------------------------------------------------
     def load_blocklist(self) -> int:
-        """(Re)load cfg.blocklist into the session. Returns the number of ranges."""
+        """Set the local-network policy and blocklist. Return the user range count."""
         f = lt.ip_filter()
+        if not self.cfg.allow_local_network:
+            for network in LOCAL_NETWORKS:
+                f.add_rule(str(network[0]), str(network[-1]), 1)  # 1 = blocked
         count = 0
         path = self.cfg.blocklist
         if path:
@@ -390,49 +421,70 @@ class Engine:
         self.save_resume(h)
 
     # -- adding ---------------------------------------------------------
-    def add(self, source: str, save_path: Path | None = None) -> str:
-        return self.add_params(parse_source(source), save_path)
+    def add(self, source: str, save_path: Path | None = None, *, reuse_existing: bool = False) -> str:
+        return self.add_params(parse_source(source), save_path, reuse_existing=reuse_existing)
 
     def has(self, atp: lt.add_torrent_params) -> bool:
         key = params_key(atp)
         return key in self.handles or key in self._adding
 
     def add_params(self, atp: lt.add_torrent_params, save_path: Path | None = None,
-                   choose_files: bool = False) -> str:
+                   choose_files: bool = False, *, reuse_existing: bool = False) -> str:
         """Add prepared params (maybe with file priorities set). Returns the key.
 
         choose_files: for a magnet link, download nothing once its file list
-        arrives and report it in `files_ready`, so the user can pick files."""
+        arrives and report it in `files_ready`, so the user can pick files.
+        reuse_existing: explicitly permit writes to files under the chosen path."""
         if self.has(atp):
             raise ValueError(already_added(atp))
-        if save_path is not None or not atp.save_path:
-            atp.save_path = str(save_path or self.cfg.save_path)
-        Path(atp.save_path).mkdir(parents=True, exist_ok=True)
         key = params_key(atp)
-        staging = self.cfg.incomplete_dir
-        if staging and Path(staging) != Path(atp.save_path) and not self._has_files(atp):
-            # Download into the folder for unfinished downloads; the files
-            # move to the chosen folder when the torrent finishes.
-            self._destinations[key] = atp.save_path
-            atp.save_path = str(staging)
-            Path(staging).mkdir(parents=True, exist_ok=True)
+        parent = Path(save_path or atp.save_path or self.cfg.save_path).expanduser().resolve()
+        if reuse_existing:
+            parent.mkdir(parents=True, exist_ok=True)
+            atp.save_path = str(parent)
+        else:
+            self._isolate_download(atp, key, parent)
+        atp.flags |= lt.torrent_flags.apply_ip_filter
         self._adding.add(key)
         if choose_files and atp.ti is None:
-            # Files default to "don't download", so nothing starts before the
-            # user has chosen (setting priorities after the fact is too late
-            # on a fast connection).
-            atp.flags |= lt.torrent_flags.default_dont_download
-            self._choose_files.add(key)
+            self._wait_for_file_choice(atp, key)
         self.ses.async_add_torrent(atp)
         return key
 
-    @staticmethod
-    def _has_files(atp: lt.add_torrent_params) -> bool:
-        """Is some of this torrent already in its save folder (e.g. re-adding a finished one)?"""
-        if atp.ti is None:
-            return False
-        fs = atp.ti.files()
-        return any((Path(atp.save_path) / fs.file_path(i)).is_file() for i in range(fs.num_files()))
+    def _isolate_download(self, atp: lt.add_torrent_params, key: str, parent: Path) -> None:
+        final = new_download_folder(parent, key)
+        staging = self.cfg.incomplete_dir
+        if staging and staging.expanduser().resolve() != final.parent:
+            try:
+                atp.save_path = str(new_download_folder(staging, key))
+            except OSError:
+                final.rmdir()
+                raise
+            self._destinations[key] = str(final)
+        else:
+            atp.save_path = str(final)
+
+    def _wait_for_file_choice(self, atp: lt.add_torrent_params, key: str) -> None:
+        # Set priorities before libtorrent sees the torrent, including when
+        # metadata was already saved but the picker was still open.
+        atp.flags |= lt.torrent_flags.default_dont_download
+        if atp.ti is not None:
+            atp.file_priorities = [0] * atp.ti.num_files()
+        self._file_choices[key] = FileChoice.WAITING
+
+    def _report_file_choice(self, key: str) -> None:
+        if self._file_choices.get(key) is FileChoice.WAITING:
+            self._file_choices[key] = FileChoice.READY
+            self.files_ready.append(key)
+
+    def choose_files(self, h: lt.torrent_handle, priorities: list[int]) -> None:
+        """Keep the choice pending on disk until libtorrent applies the priorities."""
+        key = key_of(h)
+        self._file_choices[key] = FileChoice.APPLYING
+        h.prioritize_files(priorities)
+
+    def has_pending_file_choices(self) -> bool:
+        return bool(self._file_choices)
 
     def resume_all(self) -> int:
         """Re-add every torrent saved by a previous run."""
@@ -441,14 +493,29 @@ class Engine:
             try:
                 data = f.read_bytes()
                 atp = lt.read_resume_data(data)
-                dest = lt.bdecode(data).get(DEST_KEY)
+                entry = lt.bdecode(data)
+                dest = entry.get(DEST_KEY)
+                key = params_key(atp)
+                # Old unresolved magnets lack a saved choice. Use a fresh
+                # folder and require a choice rather than downloading blindly.
+                if CHOOSE_KEY not in entry and atp.ti is None:
+                    parent = Path(os.fsdecode(dest) if dest else atp.save_path or self.cfg.save_path)
+                    self._isolate_download(atp, key, parent)
+                    self._wait_for_file_choice(atp, key)
+                else:
+                    if not atp.save_path:
+                        self._isolate_download(atp, key, self.cfg.save_path)
+                    if dest:
+                        self._destinations[key] = os.fsdecode(dest)
+                    if entry.get(CHOOSE_KEY):
+                        self._wait_for_file_choice(atp, key)
             except Exception as e:
                 self.log(tr("skipping corrupt resume file {name}: {error}", name=f.name, error=e))
                 continue
-            if not atp.save_path:
-                atp.save_path = str(self.cfg.save_path)
-            if dest:
-                self._destinations[params_key(atp)] = os.fsdecode(dest)
+            atp.flags |= lt.torrent_flags.apply_ip_filter
+            self._adding.add(key)
+            if f.stem != key:
+                self._old_resume_names[key] = f.stem
             self.ses.async_add_torrent(atp)
             count += 1
         return count
@@ -469,12 +536,18 @@ class Engine:
 
     def _handle_alert(self, a: lt.alert) -> None:
         if isinstance(a, lt.add_torrent_alert):
-            self._adding.discard(params_key(a.params))
+            added_key = params_key(a.params)
+            self._adding.discard(added_key)
             if a.error.value():
+                self._file_choices.pop(added_key, None)
+                self._destinations.pop(added_key, None)
                 self.log(tr("add failed: {error}", error=a.error.message()))
                 return
             h = a.handle
-            self.handles[key_of(h)] = h
+            self.handles[added_key] = h
+            key = self._refresh_key(h)
+            if h.status().has_metadata:
+                self._report_file_choice(key)
             self.save_resume(h)  # persist right away so it survives a crash
         elif isinstance(a, (lt.metadata_received_alert, lt.torrent_finished_alert)):
             if not a.handle.is_valid():
@@ -482,22 +555,29 @@ class Engine:
             name = a.handle.status().name
             self.log(tr("metadata received: {name}", name=name) if isinstance(a, lt.metadata_received_alert)
                      else tr("finished, now seeding: {name}", name=name))
-            key = key_of(a.handle)
-            if isinstance(a, lt.metadata_received_alert) and key in self._choose_files:
-                # Everything is at "don't download" (see add_params) until the user picks files.
-                self._choose_files.discard(key)
-                self.files_ready.append(key)
-            if isinstance(a, lt.torrent_finished_alert):
+            key = self._refresh_key(a.handle)
+            if isinstance(a, lt.metadata_received_alert):
+                self._report_file_choice(key)
+            elif key not in self._file_choices:
                 self._move_to_destination(a.handle)
             self.save_resume(a.handle)
+        elif isinstance(a, lt.file_prio_alert):
+            if a.handle.is_valid():
+                key = key_of(a.handle)
+                if self._file_choices.get(key) is FileChoice.APPLYING:
+                    del self._file_choices[key]
+                    if a.handle.status().is_finished:
+                        self._move_to_destination(a.handle)
+                    self.save_resume(a.handle)
         elif isinstance(a, lt.save_resume_data_alert):
             self._pending_saves -= 1
             # Key off the params, not the handle: the handle is already
             # invalid if the torrent was removed while this save was in flight.
             key = str(a.params.info_hashes.get_best())
-            if key in self._removed or set(key) == {"0"}:
+            if self.handles.get(key) != a.handle:
                 return
             entry = lt.write_resume_data(a.params)
+            entry[CHOOSE_KEY] = int(key in self._file_choices)
             if key in self._destinations:
                 entry[DEST_KEY] = os.fsencode(self._destinations[key])
             data = lt.bencode(entry)
@@ -505,6 +585,9 @@ class Engine:
             tmp = target.with_suffix(".tmp")
             tmp.write_bytes(data)
             os.replace(tmp, target)  # atomic: never leave a half-written file
+            old_name = self._old_resume_names.pop(key, None)
+            if old_name:
+                (self.torrents_dir / f"{old_name}.resume").unlink(missing_ok=True)
         elif isinstance(a, lt.save_resume_data_failed_alert):
             self._pending_saves -= 1
         elif isinstance(a, lt.storage_moved_alert):
@@ -546,6 +629,20 @@ class Engine:
             self.log(a.message())
 
     # -- control --------------------------------------------------------
+    def _refresh_key(self, h: lt.torrent_handle) -> str:
+        """Keep pending state when magnet metadata supplies a better info hash."""
+        key = key_of(h)
+        if self.handles.get(key) == h:
+            return key
+        old = next((saved for saved, handle in self.handles.items() if handle == h), None)
+        if old:
+            self.handles[key] = self.handles.pop(old)
+            self._old_resume_names[key] = self._old_resume_names.pop(old, old)
+            for index in (self._file_choices, self._destinations):
+                if old in index:
+                    index[key] = index.pop(old)
+        return key
+
     def save_resume(self, h: lt.torrent_handle) -> None:
         if h.is_valid():
             h.save_resume_data(lt.torrent_handle.save_info_dict)
@@ -583,11 +680,14 @@ class Engine:
     def remove(self, h: lt.torrent_handle, delete_files: bool = False) -> None:
         """Drop a torrent from the session and forget it; optionally delete its data."""
         key = key_of(h)
-        self._removed.add(key)
         self.ses.remove_torrent(h, lt.session.delete_files if delete_files else 0)
         (self.torrents_dir / f"{key}.resume").unlink(missing_ok=True)
+        old_name = self._old_resume_names.pop(key, None)
+        if old_name:
+            (self.torrents_dir / f"{old_name}.resume").unlink(missing_ok=True)
         self.handles.pop(key, None)
         self._destinations.pop(key, None)
+        self._file_choices.pop(key, None)
         self.disk_errors.pop(key, None)
         self._error_files.pop(key, None)
 
@@ -639,12 +739,12 @@ class Engine:
         One that is still in the folder for unfinished downloads stays there,
         and goes to `folder` when it finishes."""
         key = key_of(h)
-        if key in self._destinations and not h.status().is_finished:
-            self._destinations[key] = str(folder)
+        target = new_download_folder(folder, key)
+        if key in self._destinations and (not h.status().is_finished or key in self._file_choices):
+            self._destinations[key] = str(target)
         else:
             self._destinations.pop(key, None)
-            Path(folder).mkdir(parents=True, exist_ok=True)
-            h.move_storage(str(folder))
+            h.move_storage(str(target), lt.move_flags_t.fail_if_exist)
         self.save_resume(h)
 
     def error_text(self, st: lt.torrent_status) -> str:
@@ -678,7 +778,7 @@ class Engine:
         except OSError as e:
             self.log(tr("couldn't move files: {error}", error=e))
             return
-        h.move_storage(dest)  # storage_moved_alert clears the entry
+        h.move_storage(dest, lt.move_flags_t.fail_if_exist)  # storage_moved_alert clears the entry
 
     # -- is the port reachable? ---------------------------------------------------
     def _note_connections(self, incoming: bool, peers: int, now: float | None = None) -> None:

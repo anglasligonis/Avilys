@@ -323,6 +323,11 @@ STRINGS = {
     "Stop seeding after": "Nebeskleisti po",
     "Queue && seeding": "Eilė ir skleidimas",
     "No blocklist": "Blokavimo sąrašo nėra",
+    "Allow trackers, web seeds and peers on the local network":
+        "Leisti seklius, žiniatinklio šaltinius ir dalyvius vietiniame tinkle",
+    "Reuse existing files in this folder": "Naudoti šiame aplanke esančius failus",
+    "Avilys may overwrite existing files when this is enabled.":
+        "Įjungus šią parinktį, Avilys gali perrašyti esamus failus.",
     "Show peer countries": "Rodyti siuntėjų šalis",
     "Anonymous mode": "Anoniminis režimas",
     "Don't tell peers and trackers which program and version I use":

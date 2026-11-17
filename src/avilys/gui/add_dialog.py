@@ -94,6 +94,12 @@ class AddTorrentDialog(QDialog):
             self._build_file_list(layout)
         if self.choose_box is not None:
             layout.addWidget(self.choose_box)
+        self.reuse_existing = QCheckBox(tr("Reuse existing files in this folder"))
+        self.reuse_existing.setToolTip(tr("Avilys may overwrite existing files when this is enabled."))
+        if not choosing:
+            layout.addWidget(self.reuse_existing)
+        else:
+            self.reuse_existing.hide()
 
         self.footer = QLabel()
         layout.addWidget(self.footer)

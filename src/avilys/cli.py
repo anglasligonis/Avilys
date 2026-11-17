@@ -11,7 +11,7 @@ from pathlib import Path
 
 import libtorrent as lt
 
-from . import __version__, display
+from . import __version__, config, display
 from .engine import Config, Engine, forget, saved_torrents
 
 
@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-utp", action="store_true")
     s.add_argument("--no-lsd", action="store_true", help="disable local peer discovery")
     s.add_argument("--no-port-mapping", action="store_true", help="disable UPnP / NAT-PMP")
+    s.add_argument("--allow-local-network", action="store_true", help="allow trackers, peers and web seeds on local addresses")
+    s.add_argument("--reuse-existing", action="store_true", help="use the selected folder directly; existing files may be overwritten")
     s.add_argument("--max-down", type=kib, default=0, metavar="KIB/S")
     s.add_argument("--max-up", type=kib, default=0, metavar="KIB/S")
     s.add_argument("--seed-ratio", type=float, metavar="R", help="stop seeding a torrent once its ratio reaches R (0 = never seed)")
@@ -61,7 +63,7 @@ def cmd_list(state_dir: Path) -> int:
         print("no saved torrents")
     for key, atp in saved:
         name = atp.ti.name() if atp.ti else atp.name or "(metadata pending)"
-        print(f"{key}  {name}  -> {atp.save_path}")
+        print(display.terminal_text(f"{key}  {name}  -> {atp.save_path}"))
     return 0
 
 
@@ -79,6 +81,8 @@ def cmd_remove(state_dir: Path, prefix: str) -> int:
 
 
 def all_done(engine: Engine, seed_ratio: float | None) -> bool:
+    if engine.has_pending_file_choices():
+        return False
     sts = engine.statuses()
     if not sts:
         return False
@@ -95,10 +99,14 @@ def _interrupt(*_):
 
 
 def cmd_start(args) -> int:
+    saved = config.load(args.state_dir)
     cfg = Config(
         state_dir=args.state_dir,
         save_path=args.save_path.expanduser().resolve(),
         listen=f"0.0.0.0:{args.port},[::]:{args.port}",
+        interface=saved.interface,
+        allow_local_network=args.allow_local_network or saved.allow_local_network,
+        blocklist=saved.blocklist,
         dht=not args.no_dht,
         utp=not args.no_utp,
         lsd=not args.no_lsd,
@@ -114,9 +122,9 @@ def cmd_start(args) -> int:
         engine.log(f"resumed {resumed} torrent(s) from {cfg.state_dir}")
     for src in args.sources:
         try:
-            engine.add(src)
-        except (ValueError, RuntimeError) as e:
-            print(f"avilys: {e}", file=sys.stderr)
+            engine.add(src, reuse_existing=args.reuse_existing)
+        except (ValueError, RuntimeError, OSError) as e:
+            print(display.terminal_text(f"avilys: {e}"), file=sys.stderr)
             return 2
 
     # Treat SIGTERM like Ctrl+C so resume data is always flushed.
@@ -133,7 +141,10 @@ def cmd_start(args) -> int:
                 last_save = now
             if now - last_draw >= args.interval:
                 last_draw = now
-                screen = display.render(engine.statuses(), engine.events, "Ctrl+C to quit")
+                footer = "Ctrl+C to quit"
+                if engine.has_pending_file_choices():
+                    footer = "Open the desktop app to choose pending files. " + footer
+                screen = display.render(engine.statuses(), engine.events, footer)
                 if tty:
                     sys.stdout.write("\x1b[H\x1b[J" + screen + "\n")
                 else:
