@@ -30,7 +30,27 @@ ALERT_MASK = (
     | lt.alert_category.status
     | lt.alert_category.storage
     | lt.alert_category.port_mapping
+    | lt.alert_category.file_progress  # file_completed_alert: mark each file as it completes
 )
+
+# Windows "Mark of the Web": files from the internet carry this alternate data
+# stream, so SmartScreen and Office's Protected View check them before they
+# run or open. Browsers add it to every download; so do we.
+ZONE_IDENTIFIER = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=about:internet\r\n"
+
+
+def mark_downloaded(path: Path, windows: bool | None = None) -> bool:
+    """Mark a downloaded file as coming from the internet (Windows only).
+    False if it couldn't be marked, e.g. on a FAT32 or exFAT drive."""
+    windows = sys.platform == "win32" if windows is None else windows
+    if not windows:
+        return False
+    try:
+        with open(f"{path}:Zone.Identifier", "w", newline="") as f:
+            f.write(ZONE_IDENTIFIER)
+        return True
+    except OSError:
+        return False
 
 
 @dataclass
@@ -330,6 +350,7 @@ class Engine:
         self._adding: set[str] = set()   # added, waiting for add_torrent_alert
         self._choose_files: set[str] = set()  # magnets whose files the user picks on arrival
         self.files_ready: list[str] = []  # metadata arrived for these; the UI shows a file picker
+        self.marker = mark_downloaded  # swappable in tests
 
     def apply_config(self, cfg: Config) -> None:
         """Change settings while running (save_path affects new torrents)."""
@@ -488,8 +509,12 @@ class Engine:
                 self._choose_files.discard(key)
                 self.files_ready.append(key)
             if isinstance(a, lt.torrent_finished_alert):
+                self.mark_files(a.handle)  # also covers files that were finished before a restart
                 self._move_to_destination(a.handle)
             self.save_resume(a.handle)
+        elif isinstance(a, lt.file_completed_alert):
+            if a.handle.is_valid():
+                self.mark_files(a.handle, [a.index])
         elif isinstance(a, lt.save_resume_data_alert):
             self._pending_saves -= 1
             # Key off the params, not the handle: the handle is already
@@ -514,6 +539,7 @@ class Engine:
                 dest = self._destinations.get(key)
                 if dest and Path(a.handle.status().save_path) == Path(dest):
                     del self._destinations[key]  # it has arrived
+                self.mark_files(a.handle)  # a move to another drive copies files without the mark
                 self.save_resume(a.handle)
         elif isinstance(a, lt.storage_moved_failed_alert):
             self.log(tr("couldn't move files: {error}", error=a.message()))
@@ -544,6 +570,25 @@ class Engine:
             if isinstance(a, lt.portmap_alert):
                 self.port_mapped = True
             self.log(a.message())
+
+    def mark_files(self, h: lt.torrent_handle, indexes=None) -> int:
+        """Mark this torrent's finished files (or just `indexes`) as downloaded
+        from the internet. Returns how many were marked."""
+        if sys.platform != "win32" and self.marker is mark_downloaded:
+            return 0
+        ti = h.torrent_file()
+        if ti is None:
+            return 0
+        fs = ti.files()
+        done = h.file_progress()
+        save_path = Path(h.status().save_path)
+        marked = 0
+        for i in range(fs.num_files()) if indexes is None else indexes:
+            if fs.file_flags(i) & (lt.file_storage.flag_pad_file | lt.file_storage.flag_symlink):
+                continue
+            if done[i] == fs.file_size(i) and self.marker(save_path / fs.file_path(i)):
+                marked += 1
+        return marked
 
     # -- control --------------------------------------------------------
     def save_resume(self, h: lt.torrent_handle) -> None:

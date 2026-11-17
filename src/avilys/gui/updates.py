@@ -18,6 +18,8 @@ class UpdateChecker(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.url = update.LATEST_API  # swappable in tests
+        # The address to send from (the adapter chosen in Settings); raises OSError if it's down
+        self.source = lambda: None
         self.busy = False
         self.timer = QTimer(self, interval=update.CHECK_EVERY * 1000, timeout=lambda: self.check())
 
@@ -32,12 +34,17 @@ class UpdateChecker(QObject):
     def check(self, manual: bool = False) -> None:
         if self.busy:
             return
+        try:
+            source = self.source()
+        except OSError as e:  # never fall back to another route
+            self.finished.emit(None, str(e), manual)
+            return
         self.busy = True
         url = self.url
 
         def work():
             try:
-                result, error = update.fetch_latest(url), ""
+                result, error = update.fetch_latest(url, source_address=source), ""
             except RuntimeError as e:
                 result, error = None, str(e)
             self.busy = False

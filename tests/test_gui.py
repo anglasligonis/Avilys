@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -213,6 +214,54 @@ def test_second_launch_hands_links_to_running_window(tmp_path):
     server.close()
     server.deleteLater()
     spin(app, lambda: True)  # let Qt finish deleting before the next test
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix socket folders")
+def test_the_socket_lives_where_only_this_user_can_reach_it(tmp_path, monkeypatch):
+    """Its name is easy to work out, so another account could create it first
+    and receive every link opened. It goes in a private folder: the session's
+    runtime folder, else our own folder in /tmp, else the state folder."""
+    import stat
+
+    from avilys.gui import single
+
+    runtime, tmp, state = tmp_path / "run", tmp_path / "tmp", tmp_path / "state"
+    runtime.mkdir(mode=0o700)
+    tmp.mkdir()
+    monkeypatch.setattr(single.tempfile, "gettempdir", lambda: str(tmp))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    assert Path(single.server_name(state)).parent == runtime
+    assert single.server_name(state) != single.server_name(tmp_path / "other")
+
+    runtime.chmod(0o755)  # not private: not used
+    own = tmp / f"avilys-{os.getuid()}"
+    assert Path(single.server_name(state)).parent == own
+    assert stat.S_IMODE(own.stat().st_mode) == 0o700
+
+    own.chmod(0o777)  # someone made "our" folder first, or loosened it: not used
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    assert Path(single.server_name(state)).parent == state
+
+
+def test_links_only_go_to_a_window_of_the_same_user(tmp_path, monkeypatch):
+    from avilys.gui import single
+
+    app = make_app([])
+    name = single.server_name(tmp_path / "state")
+    server = single.InstanceServer(name)
+    got = []
+    server.received.connect(got.append)
+    assert single.send_to_running(name, ["mine"], ack_ms=0)
+    spin(app, lambda: got)
+    # As if another account were listening under this name
+    monkeypatch.setattr(single, "server_is_ours", lambda sock: False)
+    assert not single.send_to_running(name, ["magnet:?xt=urn:btih:" + "0" * 40], ack_ms=0)
+    for _ in range(20):
+        app.processEvents()
+    assert got == [["mine"]]
+    server.close()
+    server.deleteLater()
+    spin(app, lambda: True)
 
 
 def test_app_icon_renders():
@@ -781,3 +830,50 @@ def test_peers_still_connecting_are_not_called_plaintext(tmp_path):
     assert row["Encryption"] == "–" and row["Client"] == "Connecting…"
     win.quit()
     silent.close()
+
+
+def test_names_from_torrents_are_shown_as_text_not_html(tmp_path, monkeypatch):
+    """A torrent's name is whatever its maker (or the web page with the magnet
+    link) wrote. Markup in it must show as typed, not restyle the dialogs."""
+    import urllib.parse
+
+    from PySide6 import QtGui
+    from PySide6.QtGui import QTextDocument
+    from PySide6.QtWidgets import QLabel, QMessageBox
+
+    from avilys.gui import dialogs
+    from avilys.gui.add_dialog import AddTorrentDialog
+
+    app = make_app([])
+    name = '<span style="font-size:1px">movie</span><b>Security update (verified)</b>'
+    magnet = ("magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=" + urllib.parse.quote(name))
+
+    def shown(text):
+        """What a tooltip reads as: Qt draws it as HTML when it looks like HTML."""
+        if not QtGui.Qt.mightBeRichText(text):
+            return text
+        doc = QTextDocument()
+        doc.setHtml(text)
+        return doc.toPlainText()
+
+    dlg = AddTorrentDialog(lt.parse_magnet_uri(magnet), tmp_path, None)
+    (label,) = [w for w in dlg.findChildren(QLabel) if w.text() == name]
+    assert label.textFormat() == Qt.PlainText
+    dlg.deleteLater()
+
+    asked = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: asked.append((box.textFormat(), box.text())))
+    dialogs.confirm_remove(None, [name])
+    assert asked == [(Qt.PlainText, f"Remove “{name}” from the list?")]
+
+    win = MainWindow(gui_config(tmp_path))
+    assert win.add_sources([magnet]) == []
+    spin(app, lambda: (win.refresh(), win.model.rowCount() == 1)[1])
+    tip = win.proxy.index(0, 0).data(Qt.ToolTipRole)
+    assert shown(tip) == name  # escaped: reads exactly as the name
+    win.table.selectRow(0)
+    win.details.setCurrentWidget(win.details.general)
+    win.details.refresh()
+    assert all(f.textFormat() == Qt.PlainText for f in win.details.fields.values())
+    win.quit()
+

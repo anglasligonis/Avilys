@@ -20,6 +20,8 @@ env:
     libxcb-xkb1 libxcb-icccm4 libxcb-cursor0 libxcb-image0 libxcb-util1
     libxcb-render-util0 libxcb-keysyms1 libxcb-randr0 libxcb-shape0 libxcb-xinerama0
 
+# Actions are pinned to commits (tag in the comment): a moved tag can't change what runs,
+# least of all in the release job, which can write to the repository.
 jobs:
   test:
     strategy:
@@ -28,8 +30,8 @@ jobs:
         os: [ubuntu-22.04, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - if: runner.os == 'Linux'
@@ -43,14 +45,14 @@ jobs:
     needs: test
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install build tools
         run: |
           pip install -r packaging/requirements-build.txt
-          pip install --no-deps .
+          pip install --no-deps --no-build-isolation .  # setuptools comes from the locked install
       - name: Version
         id: version
         shell: bash
@@ -95,7 +97,7 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "installed app self-test failed: $($p.ExitCode)" }
           $p = Start-Process -FilePath "$env:LOCALAPPDATA\Programs\Avilys\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "uninstaller exit code $($p.ExitCode)" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: avilys-windows-installer
           path: dist/avilys-*-setup.exe
@@ -106,15 +108,15 @@ jobs:
     needs: test
     runs-on: ubuntu-22.04  # oldest supported glibc we build on = widest compatibility
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: sudo apt-get update && sudo apt-get install -y $QT_LINUX_DEPS desktop-file-utils xvfb
       - name: Install build tools
         run: |
           pip install -r packaging/requirements-build.txt
-          pip install --no-deps .
+          pip install --no-deps --no-build-isolation .  # setuptools comes from the locked install
       - name: Version
         id: version
         run: echo "version=$(python -c 'import avilys; print(avilys.__version__)')" >> "$GITHUB_OUTPUT"
@@ -125,6 +127,8 @@ jobs:
       - name: Get appimagetool
         run: |
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+          # It runs in the build and packs the release, so only this exact file
+          echo "46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1  appimagetool" | sha256sum -c -
           chmod +x appimagetool
       - run: packaging/linux/build-appimage.sh ${{ steps.version.outputs.version }} ./appimagetool
         env:
@@ -135,7 +139,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
           AVILYS_REQUIRE_GEOIP: "1"
           QT_QPA_PLATFORM: xcb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: avilys-linux-appimage
           path: dist/avilys-*-x86_64.AppImage
@@ -149,11 +153,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: out
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: out/*
           # Notes are written by hand when the release is published.

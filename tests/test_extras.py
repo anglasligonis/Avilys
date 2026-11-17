@@ -52,6 +52,50 @@ def test_download_falls_back_to_last_month(tmp_path, monkeypatch):
     assert g.country("203.0.113.1") == ("lt", "Lithuania")
 
 
+def test_country_database_download_uses_the_chosen_adapter(tmp_path, monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    body = gzip.compress(make_country_db(tmp_path / "src.mmdb", {"203.0.113.0/24": ("LT", "Lithuania")}).read_bytes())
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(self.client_address[0])
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(geoip, "URL", f"http://127.0.0.1:{server.server_address[1]}/" + "db-{month}.mmdb.gz")
+    try:
+        geoip.download(tmp_path / "state" / geoip.FILE, source_address="127.0.0.2")
+        assert seen == ["127.0.0.2"]
+        with pytest.raises(RuntimeError):  # the adapter's address is gone: no download another way
+            geoip.download(tmp_path / "other" / geoip.FILE, timeout=2, source_address="192.0.2.1")
+        assert seen == ["127.0.0.2"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_adapter_address_for_own_requests():
+    pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
+    from avilys.gui.dialogs import adapter_address
+    from avilys.net import AdapterNotConnected
+
+    assert adapter_address(None) is None and adapter_address("") is None  # any route
+    assert adapter_address("127.0.0.1") == "127.0.0.1"  # Windows stores the adapter's address
+    for gone in ("192.0.2.77", "no-such-adapter9"):
+        with pytest.raises(AdapterNotConnected):
+            adapter_address(gone)
+
+
 def test_months_roll_over_the_year():
     jan = time.strptime("2027-01-02", "%Y-%m-%d")
     assert geoip.months_to_try(jan) == ["2027-01", "2026-12"]

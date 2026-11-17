@@ -1,0 +1,11 @@
+# Exact versions the installers are built and tested with.
+# requirements-build.txt is generated from this file, with every package's
+# hashes, so a build installs exactly these files and nothing else:
+#   uv pip compile requirements-build.in --universal --generate-hashes --python-version 3.12 -o requirements-build.txt
+# (run in this folder). Change versions here, then regenerate.
+libtorrent==2.0.15
+PySide6-Essentials==6.12.0
+pyinstaller==6.22.3
+maxminddb==3.2.0
+# Builds Avilys itself in the same locked install (pip install --no-build-isolation)
+setuptools==84.2.1

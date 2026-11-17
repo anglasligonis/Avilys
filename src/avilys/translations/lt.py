@@ -26,6 +26,7 @@ def plural(n: int) -> int:
 STRINGS = {
     # -- engine: errors and the event log ------------------------------------
     "country database updated": "šalių duomenų bazė atnaujinta",
+    "network adapter {name} isn't connected": "tinklo adapteris {name} neprijungtas",
     "country database update failed: {error}": "nepavyko atnaujinti šalių duomenų bazės: {error}",
     "“{name}” is already in your list": "„{name}“ jau yra jūsų sąraše",
     "The disk is full": "Diskas pilnas",
