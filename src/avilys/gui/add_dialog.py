@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from .. import display
 from ..engine import params_name
 from ..i18n import tr, trn
+from . import icons, theme
 
 SKIP, NORMAL = 0, 4  # libtorrent download priorities
 
@@ -58,7 +59,7 @@ class AddTorrentDialog(QDialog):
         name = QLabel(params_name(atp))
         name.setWordWrap(True)
         name.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        name.setStyleSheet("font-size: 15px; font-weight: 600;")
+        name.setProperty("role", "title")
         layout.addWidget(name)
 
         summary = QLabel()
@@ -130,6 +131,7 @@ class AddTorrentDialog(QDialog):
         fs = self.ti.files()
         for i in sorted(self.files, key=lambda i: display_path(self.ti, i).lower()):
             item = QTreeWidgetItem([display_path(self.ti, i), display.size(fs.file_size(i))])
+            item.setIcon(0, icons.icon(icons.file_kind(fs.file_path(i), 1), theme.current["muted"]))
             item.setData(0, Qt.UserRole, i)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(0, Qt.Checked)

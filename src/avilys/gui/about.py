@@ -23,7 +23,8 @@ CREDITS = N_(
     'Built on <a href="https://libtorrent.org">libtorrent</a> and '
     '<a href="https://doc.qt.io/qtforpython/">Qt for Python</a>.<br>'
     'IP Geolocation by <a href="https://db-ip.com">DB-IP</a> (CC BY 4.0). '
-    'Flags from <a href="https://github.com/lipis/flag-icons">flag-icons</a> (MIT).'
+    'Flags from <a href="https://github.com/lipis/flag-icons">flag-icons</a> (MIT). '
+    'Icons from <a href="https://lucide.dev">Lucide</a> (ISC).'
 )
 
 

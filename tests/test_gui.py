@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 
 from avilys.engine import Config  # noqa: E402
 from avilys.gui.app import MainWindow, make_app  # noqa: E402
-from avilys.gui.models import category  # noqa: E402
+from avilys.gui.models import COUNT_ROLE, category  # noqa: E402
 from test_engine import engine, make_torrent  # noqa: E402
 
 
@@ -75,7 +75,7 @@ def test_window_downloads_filters_and_removes(tmp_path):
     win.filters.setCurrentRow(1)  # "Downloading"
     assert win.proxy.rowCount() == 0
     win.filters.setCurrentRow(0)
-    assert win.filters.item(2).text().endswith("1")
+    assert win.filters.item(2).data(COUNT_ROLE) == 1
 
     # Table text and the Files tab for the selected torrent
     assert win.proxy.index(0, 2).data() == "100.0%"
@@ -221,6 +221,48 @@ def test_app_icon_renders():
 
     sizes = app_icon().availableSizes()
     assert any(s.width() == 256 for s in sizes)
+
+
+def test_torrents_get_an_icon_for_what_they_hold(tmp_path):
+    from avilys.gui.icons import SHAPES, file_kind, tile
+
+    app = make_app([])
+    assert file_kind("ubuntu-24.04.3-desktop-amd64.ISO", 1) == "disc"
+    assert file_kind("Sintel.2010.mkv", 1) == "video"
+    assert file_kind("album.flac", 1) == "audio"
+    assert file_kind("setup.exe", 1) == "app"
+    assert file_kind("payload.bin", 1) == "file"
+    assert file_kind("Blender Open Movies", 7) == "folder"
+    assert file_kind("anything", None) == "magnet"  # no file list yet
+    assert all(kind in SHAPES for kind in ("disc", "video", "audio", "app", "file", "folder", "magnet", "error"))
+    pm = tile("disc", "#c27c08", "#fbf0d8")
+    assert not pm.isNull() and pm.deviceIndependentSize().width() == 24
+
+    # In the window: the name cell carries the tile, the status cell the state
+    win = MainWindow(gui_config(tmp_path))
+    win.add_sources(["magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel"])
+    spin(app, lambda: (win.refresh(), win.model.rowCount() == 1)[1])
+    assert win.model.kind(0) == "magnet"
+    assert not win.proxy.index(0, 0).data(Qt.DecorationRole).isNull()
+    assert win.proxy.index(0, 3).data() in ("Queued", "Fetching metadata")  # queued for a moment at first
+    win.quit()
+
+
+def test_check_boxes_are_drawn_in_the_theme(tmp_path):
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QCheckBox
+
+    from avilys.gui import theme
+
+    make_app([], theme_choice="light")
+    box = QCheckBox("x")
+    box.setChecked(True)
+    box.resize(box.sizeHint())
+    img = QImage(box.size(), QImage.Format_ARGB32)
+    img.fill(0)
+    box.render(img)
+    accent = QColor(theme.current["check"])
+    assert any(img.pixelColor(x, y) == accent for x in range(img.width()) for y in range(img.height()))
 
 
 def throttled_seeder(tmp_path, tfile, rate=2 * 1024 * 1024):
@@ -601,7 +643,7 @@ def test_torrent_errors_are_shown_and_can_be_retried(tmp_path):
 
     # The sidebar counts it and can show only the broken ones
     errors_row = next(i for i in range(win.filters.count()) if win.filters.item(i).data(Qt.UserRole) == "Errors")
-    assert win.filters.item(errors_row).text().endswith("1")
+    assert win.filters.item(errors_row).data(COUNT_ROLE) == 1 and not win.filters.item(errors_row).isHidden()
     win.filters.setCurrentRow(errors_row)
     assert win.proxy.rowCount() == 1
     win.filters.setCurrentRow(1)  # "Downloading"
@@ -621,7 +663,7 @@ def test_torrent_errors_are_shown_and_can_be_retried(tmp_path):
     spin(app, lambda: (win.refresh(), category(win.model.statuses()[0]) == "Seeding")[1], [seeder])
     win.details.refresh()
     assert win.details.error_row.isHidden()
-    assert win.filters.item(errors_row).text().endswith("0")
+    assert win.filters.item(errors_row).data(COUNT_ROLE) == 0 and win.filters.item(errors_row).isHidden()
     assert [title for title, _ in win.notifications] == ["Torrent stopped", "Download complete"]
     win.quit()
     seeder.shutdown()
