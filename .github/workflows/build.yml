@@ -3,10 +3,14 @@ name: build
 on:
   # main, release tags and pull requests. Branch pushes without a PR don't
   # build (run it by hand with "Run workflow"), so a PR isn't built twice.
+  # Changes that only touch docs don't build at all. Tags always build:
+  # GitHub doesn't apply path filters to tag pushes.
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore: ["docs/**", "**.md", "LICENSE"]
   pull_request:
+    paths-ignore: ["docs/**", "**.md", "LICENSE"]
   workflow_dispatch:
 
 permissions:
