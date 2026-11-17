@@ -48,8 +48,12 @@ def mark_downloaded(path: Path, windows: bool | None = None) -> bool:
     if not windows:
         return False
     try:
-        with open(f"{path}:Zone.Identifier", "w", newline="") as f:
-            f.write(ZONE_IDENTIFIER)
+        # A queued alert may outlive the file. Opening an alternate stream on
+        # a missing file recreates it. Keep the base file open on Windows
+        # so it cannot be deleted while we write the stream.
+        with path.open("rb"):
+            with open(f"{path}:Zone.Identifier", "w", newline="") as f:
+                f.write(ZONE_IDENTIFIER)
         return True
     except OSError:
         return False

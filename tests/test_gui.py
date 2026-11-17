@@ -503,8 +503,9 @@ def test_files_tab_opens_and_reveals_files(tmp_path, monkeypatch):
     # A skipped file that isn't on disk explains itself instead of failing
     (cfg.save_path / "Album" / "01 intro.flac").unlink()
     h = win.engine.handles[next(iter(win.engine.handles))]
-    h.file_priority(win.details._file_rows[rows["01 intro.flac"]], 0)
-    spin(app, lambda: 0 in list(h.get_file_priorities()))
+    index = win.details._file_rows[rows["01 intro.flac"]]
+    h.file_priority(index, 0)
+    spin(app, lambda: h.get_file_priorities()[index] == 0)
     win.details.open_file(rows["01 intro.flac"])
     assert len(opened) == 1 and "Don't download" in messages[-1]
     win.quit()

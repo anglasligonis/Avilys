@@ -609,6 +609,15 @@ def test_mark_of_the_web_format(tmp_path):
     assert f.read_bytes() == b"MZ"  # the file itself is untouched
 
 
+def test_mark_of_the_web_does_not_recreate_a_missing_file(tmp_path):
+    from avilys.engine import mark_downloaded
+
+    missing = tmp_path / "deleted.exe"
+    assert not mark_downloaded(missing, windows=True)
+    assert not missing.exists()
+    assert not Path(f"{missing}:Zone.Identifier").exists()
+
+
 def test_finished_files_are_marked_as_downloaded(tmp_path):
     """Every file of a torrent is marked once complete, so Windows warns before
     a downloaded program runs; files not downloaded are left alone."""
