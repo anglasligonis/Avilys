@@ -507,19 +507,23 @@ class MainWindow(QMainWindow):
 
     def _file_picker_done(self, dlg: AddTorrentDialog, h, result: int) -> None:
         self._file_pickers.remove(dlg)
-        if not h.is_valid():
+        if self._shut_down or not h.is_valid():
             return
         if result != QDialog.Accepted:
             self.engine.remove(h)  # Cancel means "don't add this after all"
             self.refresh()
             return
         atp, save_path = dlg.result_params()
-        h.prioritize_files(list(atp.file_priorities) or [4] * h.torrent_file().num_files())
-        if save_path != self.engine.destination(h):
-            self.engine.move(h, save_path)
+        try:
+            if save_path != self.engine.destination(h):
+                self.engine.move(h, save_path)
+        except OSError as e:
+            self._report([str(e)])
+            self.engine.files_ready.append(key_of(h))
+            return
+        self.engine.choose_files(h, list(atp.file_priorities) or [4] * h.torrent_file().num_files())
         if dlg.dont_ask.isChecked():
             self.set_preferences(confirm_add=False)
-        self.engine.save_resume(h)
         self.refresh()
 
     def toggle_slow_mode(self) -> None:
@@ -647,18 +651,20 @@ class MainWindow(QMainWindow):
                 if self.engine.has(atp):
                     raise ValueError(already_added(atp))
                 save_path = self.cfg.save_path
+                reuse_existing = False
                 if ask:
                     dlg = AddTorrentDialog(atp, save_path, self)
                     if not dlg.exec():
                         continue
                     atp, save_path = dlg.result_params()
+                    reuse_existing = dlg.reuse_existing.isChecked()
                     if dlg.dont_ask.isChecked():
                         self.set_preferences(confirm_add=False)
                         ask = False
                     choose = atp.ti is None and dlg.choose_later
                 else:
                     choose = False
-                self.engine.add_params(atp, save_path, choose_files=choose)
+                self.engine.add_params(atp, save_path, choose_files=choose, reuse_existing=reuse_existing)
             except (ValueError, RuntimeError, OSError) as e:
                 errors.append(str(e))
         self.refresh()

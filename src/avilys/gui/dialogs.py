@@ -346,6 +346,8 @@ class SettingsDialog(QDialog):
             "{n} address range blocked.", "{n} address ranges blocked.", blocked_ranges) + " "
         self.anonymous = QCheckBox(tr("Don't tell peers and trackers which program and version I use"))
         self.anonymous.setChecked(cfg.anonymous)
+        self.allow_local_network = QCheckBox(tr("Allow trackers, web seeds and peers on the local network"))
+        self.allow_local_network.setChecked(cfg.allow_local_network)
         self.peer_countries = QCheckBox(tr("Show peer countries"))
         self.peer_countries.setChecked(cfg.peer_countries)
         tabs.addTab(page(
@@ -357,6 +359,7 @@ class SettingsDialog(QDialog):
             (tr("Anonymous mode"), self.anonymous),
             ("", hint(tr("Your IP address stays visible to peers: use a VPN to hide it. "
                          "Some private trackers refuse programs they can't identify."))),
+            ("", self.allow_local_network),
             (tr("Countries"), self.peer_countries),
             ("", hint(tr("Uses the free country database from db-ip.com (IP Geolocation by DB-IP), "
                          "refreshed about once a month."))),
@@ -465,6 +468,7 @@ class SettingsDialog(QDialog):
             seed_hours=self.hours.value() if self.stop_after.isChecked() else None,
             blocklist=Path(block).expanduser() if block else None,
             anonymous=self.anonymous.isChecked(),
+            allow_local_network=self.allow_local_network.isChecked(),
             peer_countries=self.peer_countries.isChecked(),
         )
 

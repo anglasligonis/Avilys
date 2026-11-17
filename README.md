@@ -66,7 +66,11 @@ avilys-gui                    # or: avilys gui
   browser works too, and goes to the open window.
 - A dialog asks where to save and which files to download, with the selected
   size and free space shown. For magnet links, the file choice appears as soon
-  as the file list arrives from peers, and nothing downloads before that.
+  as the file list arrives from peers. A pending choice survives a restart,
+  and files wait until you confirm the selection.
+- Each new download gets its own subfolder. To seed files you already have,
+  select their folder and check **Reuse existing files in this folder**.
+  Enable this only when you trust the torrent and intend to let it write there.
 - **Watch folder:** `.torrent` files that land in a chosen folder are added
   automatically.
 
@@ -131,6 +135,10 @@ the poem *Seven Seas* by KS.
   telling peers and trackers that you use Avilys and which version. It does
   not hide your IP address (use a VPN for that), and some private trackers
   refuse programs they can't identify.
+- **Local network:** private and other local addresses are blocked for
+  trackers, web seeds and peers by default. Enable **Allow trackers, web seeds
+  and peers on the local network** under Privacy if you use a LAN tracker or
+  share with local peers. Local peer discovery also requires this setting.
 
 <p>
   <img src="docs/screenshot-dark.png" alt="Avilys in the dark theme, Peers tab" width="49%">
@@ -159,6 +167,13 @@ avilys remove 656c2093    # forget a torrent (its files are kept)
 Ctrl+C (or SIGTERM) shuts down cleanly: resume data for every torrent and the
 DHT routing table are written to `~/.local/share/avilys/` (this follows
 `$XDG_DATA_HOME`, and `--state-dir` overrides it).
+
+Terminal mode uses the network adapter, IP blocklist and local-network
+preference saved in that state folder. Use `--allow-local-network` to permit
+local addresses for a run, or `--reuse-existing` to add torrents directly to
+the selected folder when you intend to let them write to existing files.
+Open the desktop app to confirm a pending magnet file selection. This includes
+unresolved magnets saved by older versions that did not record the choice.
 
 Run `avilys start --help` to see every option, including `--port`,
 `--no-dht`, `--no-utp`, `--no-lsd`, `--no-port-mapping` and `--max-down`.

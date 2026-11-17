@@ -32,7 +32,7 @@ def engine(tmp: Path, name: str, **overrides) -> Engine:
         dht=False,
         lsd=False,
         port_mapping=False,
-        **overrides,
+        **{"allow_local_network": True, **overrides},
     )
     return Engine(cfg)
 
@@ -64,7 +64,7 @@ def transfer(tmp: Path, **overrides) -> int:
     everyone.add_rule("0.0.0.0", "255.255.255.255", 1 << seeder.ses.global_peer_class_id)
     seeder.ses.set_peer_class_filter(everyone)
     leecher = engine(tmp, "leecher", **overrides)
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     leecher.add(str(tfile))
     wait_for(seeder, lambda: seeder.handles and leecher.handles, others=[leecher])
     wait_for(seeder, lambda: seeder.statuses()[0].is_seeding, others=[leecher])
@@ -81,7 +81,7 @@ def transfer(tmp: Path, **overrides) -> int:
 
     wait_for(leecher, done, others=[seeder])
 
-    got = (tmp / "leecher" / "data" / "payload.bin").read_bytes()
+    got = (Path(lh.status().save_path) / "payload.bin").read_bytes()
     assert got == (seed_dir / "payload.bin").read_bytes()
     assert seeder.statuses()[0].total_payload_upload > 0  # the seeder really seeded
     leecher.shutdown()
@@ -123,7 +123,7 @@ def test_resume_data_survives_restart(tmp_path):
     tfile = make_torrent(data, tmp_path / "t.torrent", size=256 * 1024)
 
     first = engine(tmp_path, "a")
-    first.add(str(tfile))
+    first.add(str(tfile), reuse_existing=True)
     wait_for(first, lambda: first.handles and first.statuses()[0].is_seeding)
     first.shutdown()
     first = None  # release the session before reopening the same state dir
@@ -162,7 +162,7 @@ def test_alerts_for_removed_torrents_are_harmless(tmp_path):
     data.mkdir(parents=True)
     tfile = make_torrent(data, tmp_path / "t.torrent", size=256 * 1024)
     eng = engine(tmp_path, "a")
-    eng.add(str(tfile))
+    eng.add(str(tfile), reuse_existing=True)
     wait_for(eng, lambda: eng.handles and eng.statuses()[0].is_seeding)
     (h,) = eng.handles.values()
     h.force_recheck()  # queues more alerts for this torrent...
@@ -193,7 +193,7 @@ def seeding_pair(tmp_path, size=2 * 1024 * 1024, files=None):
         tfile = make_torrent(seed_dir, tmp_path / "t.torrent", size=size)
     seeder = engine(tmp_path, "seeder")
     leecher = engine(tmp_path, "leecher")
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     wait_for(seeder, lambda: seeder.handles and seeder.statuses()[0].is_seeding)
     return seeder, leecher, tfile
 
@@ -211,10 +211,11 @@ def test_magnet_waits_for_file_choice(tmp_path):
     assert set(h.get_file_priorities()) == {0}  # nothing downloads until chosen
     fs = h.torrent_file().files()
     keep = next(i for i in range(fs.num_files()) if fs.file_path(i).endswith("keep.bin"))
-    h.prioritize_files([4 if i == keep else 0 for i in range(fs.num_files())])
+    leecher.choose_files(h, [4 if i == keep else 0 for i in range(fs.num_files())])
     wait_for(leecher, lambda: leecher.statuses()[0].is_finished, others=[seeder])
-    assert (tmp_path / "leecher" / "data" / "pack" / "keep.bin").stat().st_size == 300_000
-    skipped = tmp_path / "leecher" / "data" / "pack" / "skip.bin"
+    pack = Path(h.status().save_path) / "pack"
+    assert (pack / "keep.bin").stat().st_size == 300_000
+    skipped = pack / "skip.bin"
     assert not skipped.exists() or skipped.stat().st_size < 300_000 or not any(skipped.read_bytes())
     leecher.shutdown()
     seeder.shutdown()
@@ -225,7 +226,7 @@ def test_seeding_time_limit_stops_seeding(tmp_path):
     data.mkdir(parents=True)
     tfile = make_torrent(data, tmp_path / "t.torrent", size=64 * 1024)
     eng = engine(tmp_path, "a", seed_hours=1 / 3600)  # one second
-    eng.add(str(tfile))
+    eng.add(str(tfile), reuse_existing=True)
     wait_for(eng, lambda: eng.handles and eng.statuses()[0].is_seeding)
 
     def stopped():
@@ -262,7 +263,7 @@ def test_move_sequential_and_per_torrent_limits(tmp_path):
     data.mkdir(parents=True)
     tfile = make_torrent(data, tmp_path / "t.torrent", size=64 * 1024)
     eng = engine(tmp_path, "a")
-    eng.add(str(tfile))
+    eng.add(str(tfile), reuse_existing=True)
     wait_for(eng, lambda: eng.handles and eng.statuses()[0].is_seeding)
     (h,) = eng.handles.values()
 
@@ -275,7 +276,8 @@ def test_move_sequential_and_per_torrent_limits(tmp_path):
 
     target = tmp_path / "elsewhere"
     eng.move(h, target)
-    wait_for(eng, lambda: (target / "payload.bin").exists() and h.status().save_path == str(target))
+    wait_for(eng, lambda: Path(h.status().save_path).parent == target)
+    assert (Path(h.status().save_path) / "payload.bin").exists()
     assert not (data / "payload.bin").exists()
     eng.shutdown()
 
@@ -293,7 +295,7 @@ def test_unfinished_downloads_use_their_own_folder(tmp_path):
     tfile = make_torrent(seed_dir, tmp_path / "t.torrent", size=1024 * 1024)
     seeder = engine(tmp_path, "seeder", upload_limit=256 * 1024)
     throttle(seeder)
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     wait_for(seeder, lambda: seeder.handles and seeder.statuses()[0].is_seeding)
 
     staging, final, later = tmp_path / "unfinished", tmp_path / "leecher" / "data", tmp_path / "films"
@@ -301,10 +303,12 @@ def test_unfinished_downloads_use_their_own_folder(tmp_path):
     key = leecher.add(str(tfile))
     wait_for(leecher, lambda: leecher.handles, others=[seeder])
     h = leecher.handles[key]
-    assert h.status().save_path == str(staging) and leecher.destination(h) == final
+    stage = Path(h.status().save_path)
+    assert stage.parent == staging and leecher.destination(h).parent == final
     # "Move to" on an unfinished download only changes where it will end up
     leecher.move(h, later)
-    assert h.status().save_path == str(staging) and leecher.destination(h) == later
+    moved_to = leecher.destination(h)
+    assert Path(h.status().save_path) == stage and moved_to.parent == later
 
     # The destination is kept in the resume file, so it survives a restart
     resume = tmp_path / "leecher" / "state" / "torrents" / f"{key}.resume"
@@ -315,13 +319,13 @@ def test_unfinished_downloads_use_their_own_folder(tmp_path):
     assert leecher.resume_all() == 1
     wait_for(leecher, lambda: leecher.handles, others=[seeder])
     h = leecher.handles[key]
-    assert leecher.destination(h) == later
+    assert leecher.destination(h) == moved_to
 
     h.connect_peer(("127.0.0.1", seeder.ses.listen_port()))
-    wait_for(leecher, lambda: (later / "payload.bin").exists() and h.status().save_path == str(later),
+    wait_for(leecher, lambda: (moved_to / "payload.bin").exists() and h.status().save_path == str(moved_to),
              others=[seeder])
-    assert (later / "payload.bin").read_bytes() == (seed_dir / "payload.bin").read_bytes()
-    assert not (staging / "payload.bin").exists()
+    assert (moved_to / "payload.bin").read_bytes() == (seed_dir / "payload.bin").read_bytes()
+    assert not (stage / "payload.bin").exists()
     wait_for(leecher, lambda: b"avilys-destination" not in resume.read_bytes())
     leecher.shutdown()
     seeder.shutdown()
@@ -332,7 +336,7 @@ def test_finished_files_already_in_the_save_folder_stay_there(tmp_path):
     data.mkdir(parents=True)
     tfile = make_torrent(data, tmp_path / "t.torrent", size=64 * 1024)
     eng = engine(tmp_path, "a", incomplete_dir=tmp_path / "unfinished")
-    eng.add(str(tfile))
+    eng.add(str(tfile), reuse_existing=True)
     wait_for(eng, lambda: eng.handles and eng.statuses()[0].is_seeding)
     assert eng.statuses()[0].save_path == str(data)
     eng.shutdown()
@@ -375,12 +379,12 @@ def blocked_download(tmp_path, name="e"):
     seed_dir.mkdir(parents=True)
     tfile = make_torrent(seed_dir, tmp_path / "t.torrent", size=256 * 1024)
     seeder = engine(tmp_path, "seeder")
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     wait_for(seeder, lambda: seeder.handles and seeder.statuses()[0].is_seeding)
     eng = engine(tmp_path, name)
     blocker = eng.cfg.save_path / "payload.bin"
     blocker.mkdir()
-    key = eng.add(str(tfile))
+    key = eng.add(str(tfile), reuse_existing=True)
     wait_for(eng, lambda: eng.handles, others=[seeder])
     eng.handles[key].connect_peer(("127.0.0.1", seeder.ses.listen_port()))
     return eng, blocker, seeder
@@ -420,12 +424,12 @@ def test_write_error_while_downloading_recovers(tmp_path):
     seed_dir.mkdir(parents=True)
     tfile = make_torrent(seed_dir, tmp_path / "t.torrent", size=512 * 1024)
     seeder = engine(tmp_path, "seeder")
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     wait_for(seeder, lambda: seeder.handles and seeder.statuses()[0].is_seeding)
     eng = engine(tmp_path, "e")
     target = eng.cfg.save_path / "payload.bin"
     os.symlink("/dev/full", target)
-    key = eng.add(str(tfile))
+    key = eng.add(str(tfile), reuse_existing=True)
     wait_for(eng, lambda: eng.handles, others=[seeder])
     h = eng.handles[key]
     h.connect_peer(("127.0.0.1", seeder.ses.listen_port()))
@@ -455,7 +459,7 @@ def test_failed_write_that_only_stops_the_download_is_an_error_too(tmp_path):
     seed_dir.mkdir(parents=True)
     tfile = make_torrent(seed_dir, tmp_path / "t.torrent", size=512 * 1024)
     seeder = engine(tmp_path, "seeder")
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     wait_for(seeder, lambda: seeder.handles and seeder.statuses()[0].is_seeding)
     eng = engine(tmp_path, "e")
     key = eng.add(str(tfile))
@@ -487,7 +491,7 @@ def test_failed_write_that_only_stops_the_download_is_an_error_too(tmp_path):
     h.connect_peer(("127.0.0.1", seeder.ses.listen_port()))
     wait_for(eng, lambda: h.status().is_seeding, others=[seeder])
     assert not has_error(h.status())
-    assert (eng.cfg.save_path / "payload.bin").read_bytes() == (seed_dir / "payload.bin").read_bytes()
+    assert (Path(h.status().save_path) / "payload.bin").read_bytes() == (seed_dir / "payload.bin").read_bytes()
     eng.shutdown()
     seeder.shutdown()
 
@@ -538,7 +542,7 @@ def what_others_see(tmp_path, name, **overrides):
     tfile = make_torrent(seed_dir, root / "t.torrent", size=1024 * 1024)
     seeder = engine(root, "seeder", upload_limit=128 * 1024)
     throttle(seeder)  # slow, so the connection lasts long enough to look at
-    seeder.add(str(tfile))
+    seeder.add(str(tfile), reuse_existing=True)
     wait_for(seeder, lambda: seeder.handles and seeder.statuses()[0].is_seeding)
     (sh,) = seeder.handles.values()
 
@@ -605,6 +609,15 @@ def test_mark_of_the_web_format(tmp_path):
     assert f.read_bytes() == b"MZ"  # the file itself is untouched
 
 
+def test_mark_of_the_web_does_not_recreate_a_missing_file(tmp_path):
+    from avilys.engine import mark_downloaded
+
+    missing = tmp_path / "deleted.exe"
+    assert not mark_downloaded(missing, windows=True)
+    assert not missing.exists()
+    assert not Path(f"{missing}:Zone.Identifier").exists()
+
+
 def test_finished_files_are_marked_as_downloaded(tmp_path):
     """Every file of a torrent is marked once complete, so Windows warns before
     a downloaded program runs; files not downloaded are left alone."""
@@ -635,7 +648,7 @@ def test_downloads_carry_the_mark_of_the_web_on_windows(tmp_path):
     wait_for(leecher, lambda: leecher.handles, others=[seeder])
     (h,) = leecher.handles.values()
     h.connect_peer(("127.0.0.1", seeder.ses.listen_port()))
-    zone = tmp_path / "leecher" / "data" / "payload.bin:Zone.Identifier"
+    zone = Path(h.status().save_path) / "payload.bin:Zone.Identifier"
     wait_for(leecher, lambda: h.status().is_seeding and os.path.exists(zone), others=[seeder])
     with open(zone) as f:
         assert "ZoneId=3" in f.read()

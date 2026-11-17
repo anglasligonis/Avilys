@@ -13,7 +13,7 @@ FILE = "settings.json"
 SAVED = ("save_path", "listen", "dht", "utp", "lsd", "port_mapping", "encryption",
          "download_limit", "upload_limit", "seed_ratio", "seed_hours", "active_downloads",
          "active_seeds", "watch_dir", "alt_download_limit", "alt_upload_limit", "alt_enabled",
-         "alt_schedule", "alt_from", "alt_to", "interface", "blocklist", "incomplete_dir", "anonymous",
+         "alt_schedule", "alt_from", "alt_to", "interface", "allow_local_network", "blocklist", "incomplete_dir", "anonymous",
          "theme", "language", "close_to_tray", "confirm_add", "peer_countries", "prevent_sleep",
          "check_updates", "skipped_version")
 PATHS = ("watch_dir", "blocklist", "incomplete_dir")  # optional paths
@@ -38,6 +38,8 @@ def load(state_dir: Path) -> Config:
         changes.pop("theme", None)
     if changes.get("language") not in ("system", *LANGUAGES):
         changes.pop("language", None)
+    if not isinstance(changes.get("allow_local_network"), bool):
+        changes.pop("allow_local_network", None)
     try:
         return dataclasses.replace(cfg, **changes)
     except TypeError:
