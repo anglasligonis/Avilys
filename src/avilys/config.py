@@ -6,7 +6,7 @@ import dataclasses
 import json
 from pathlib import Path
 
-from .engine import ENCRYPTION, Config, listen_port
+from .engine import ENCRYPTION, Config, listen_port, parse_time
 from .i18n import LANGUAGES
 
 FILE = "settings.json"
@@ -18,6 +18,35 @@ SAVED = ("save_path", "listen", "dht", "utp", "lsd", "port_mapping", "encryption
          "check_updates", "skipped_version")
 PATHS = ("watch_dir", "blocklist", "incomplete_dir")  # optional paths
 THEMES = ("system", "light", "dark")
+TIMES = ("alt_from", "alt_to")  # "HH:MM"
+OPTIONAL_NUMBERS = ("seed_ratio", "seed_hours")  # None = no limit
+OPTIONAL_TEXT = ("interface",)
+
+
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _valid(name: str, value, default) -> bool:
+    """Does a saved value have the type the setting needs? A file edited by
+    hand, or written by another version, must not stop Avilys from starting."""
+    if name in PATHS:
+        return value is None or (isinstance(value, str) and value != "")
+    if name == "save_path":
+        return isinstance(value, str) and value != ""
+    if name in TIMES:
+        return parse_time(value) is not None
+    if name in OPTIONAL_NUMBERS:
+        return value is None or (_number(value) and value >= 0)
+    if name in OPTIONAL_TEXT:
+        return value is None or isinstance(value, str)
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(default, str):
+        return isinstance(value, str)
+    return True
 
 
 def load(state_dir: Path) -> Config:
@@ -26,7 +55,10 @@ def load(state_dir: Path) -> Config:
         data = json.loads((state_dir / FILE).read_text())
     except (OSError, ValueError):
         return cfg
-    changes = {k: data[k] for k in SAVED if k in data}
+    if not isinstance(data, dict):
+        return cfg
+    # Each value that doesn't fit falls back to its default; the rest are kept.
+    changes = {k: data[k] for k in SAVED if k in data and _valid(k, data[k], getattr(cfg, k))}
     if "save_path" in changes:
         changes["save_path"] = Path(changes["save_path"])
     for key in PATHS:

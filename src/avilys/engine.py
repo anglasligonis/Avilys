@@ -7,6 +7,7 @@ import errno
 import gzip
 import ipaddress
 import os
+import re
 import sys
 import tempfile
 import time
@@ -204,15 +205,23 @@ def listen_port(listen: str) -> int:
         return 6881
 
 
-def in_window(start: str, end: str, now: time.struct_time | None = None) -> bool:
-    """Is the time of day inside start..end ("HH:MM")? Windows may cross midnight."""
-    now = now or time.localtime()
+def parse_time(text) -> int | None:
+    """"HH:MM" -> minutes after midnight, or None if it isn't a time of day."""
     try:
-        a = [int(x) for x in start.split(":")]
-        b = [int(x) for x in end.split(":")]
-    except ValueError:
+        h, m = (int(x) for x in text.split(":"))
+    except (AttributeError, ValueError):
+        return None
+    return h * 60 + m if 0 <= h < 24 and 0 <= m < 60 else None
+
+
+def in_window(start: str, end: str, now: time.struct_time | None = None) -> bool:
+    """Is the time of day inside start..end ("HH:MM")? Windows may cross midnight.
+    False if either end isn't a time of day."""
+    now = now or time.localtime()
+    lo, hi = parse_time(start), parse_time(end)
+    if lo is None or hi is None:
         return False
-    t, lo, hi = now.tm_hour * 60 + now.tm_min, a[0] * 60 + a[1], b[0] * 60 + b[1]
+    t = now.tm_hour * 60 + now.tm_min
     return lo <= t < hi if lo <= hi else (t >= lo or t < hi)
 
 
@@ -336,6 +345,21 @@ def already_added(atp: lt.add_torrent_params) -> str:
     return tr("“{name}” is already in your list", name=params_name(atp))
 
 
+# The folders new_download_folder() makes (tempfile names: letters, digits, _)
+RESERVED_FOLDER = re.compile(r"Avilys-[0-9a-f]{8}-[a-z0-9_]+")
+
+
+def remove_if_empty(folders) -> None:
+    """Delete the folders Avilys reserved for a torrent, if nothing is in them.
+    Anything else, including a folder the user picked, is left alone."""
+    for folder in folders:
+        if RESERVED_FOLDER.fullmatch(folder.name):
+            try:
+                folder.rmdir()  # fails unless it is empty
+            except OSError:
+                pass
+
+
 def new_download_folder(parent: Path, key: str) -> Path:
     """Reserve a directory exclusively, including across Avilys processes."""
     parent = parent.expanduser().resolve()
@@ -380,6 +404,9 @@ class Engine:
         self._adding: set[str] = set()   # added, waiting for add_torrent_alert
         self._file_choices: dict[str, FileChoice] = {}
         self._old_resume_names: dict[str, str] = {}  # a v1 magnet can acquire a v2 info hash
+        self._unsaved: set[str] = set()  # writing their resume file failed; try again at the next save
+        # removed torrents -> (their reserved folders, files still being deleted?)
+        self._cleanup: dict[str, tuple[list[Path], bool]] = {}
         self.files_ready: list[str] = []  # metadata arrived for these; the UI shows a file picker
         self.marker = mark_downloaded  # swappable in tests
 
@@ -556,7 +583,7 @@ class Engine:
         for a in self.ses.pop_alerts():
             try:
                 self._handle_alert(a)
-            except RuntimeError as err:  # never let one stale alert drop the rest
+            except (RuntimeError, OSError) as err:  # never let one alert drop the rest
                 self.log(tr("ignored {what}: {error}", what=type(a).__name__, error=err))
 
     def _handle_alert(self, a: lt.alert) -> None:
@@ -565,7 +592,8 @@ class Engine:
             self._adding.discard(added_key)
             if a.error.value():
                 self._file_choices.pop(added_key, None)
-                self._destinations.pop(added_key, None)
+                dest = self._destinations.pop(added_key, None)
+                remove_if_empty([Path(a.params.save_path), *([Path(dest)] if dest else [])])
                 self.log(tr("add failed: {error}", error=a.error.message()))
                 return
             h = a.handle
@@ -612,9 +640,10 @@ class Engine:
                 entry[DEST_KEY] = os.fsencode(self._destinations[key])
             data = lt.bencode(entry)
             target = self.torrents_dir / f"{key}.resume"
-            tmp = target.with_suffix(".tmp")
-            tmp.write_bytes(data)
-            os.replace(tmp, target)  # atomic: never leave a half-written file
+            if not self._write_atomically(target, data, params_name(a.params)):
+                self._unsaved.add(key)  # e.g. a full disk: the next save_all() tries again
+                return
+            self._unsaved.discard(key)
             old_name = self._old_resume_names.pop(key, None)
             if old_name:
                 (self.torrents_dir / f"{old_name}.resume").unlink(missing_ok=True)
@@ -622,6 +651,8 @@ class Engine:
             self._pending_saves -= 1
         elif isinstance(a, lt.storage_moved_alert):
             self.log(a.message())
+            old = a.old_path() if callable(a.old_path) else a.old_path
+            remove_if_empty([Path(old)])  # the folder it came from, e.g. in the one for unfinished downloads
             if a.handle.is_valid():
                 key = key_of(a.handle)
                 dest = self._destinations.get(key)
@@ -632,7 +663,11 @@ class Engine:
         elif isinstance(a, lt.storage_moved_failed_alert):
             self.log(tr("couldn't move files: {error}", error=a.message()))
         elif isinstance(a, lt.torrent_removed_alert):
-            self.handles.pop(str(a.info_hashes.get_best()), None)
+            key = str(a.info_hashes.get_best())
+            self.handles.pop(key, None)
+            self._clean_up_folders(key, deleted=False)
+        elif isinstance(a, (lt.torrent_deleted_alert, lt.torrent_delete_failed_alert)):
+            self._clean_up_folders(str(a.info_hashes.get_best()), deleted=True)
         elif isinstance(a, lt.session_stats_alert):
             values = a.values
             if isinstance(values, dict):
@@ -658,6 +693,30 @@ class Engine:
             if isinstance(a, lt.portmap_alert):
                 self.port_mapped = True
             self.log(a.message())
+
+    def _write_atomically(self, target: Path, data: bytes, name: str) -> bool:
+        """Write via a temporary file, so a failure never leaves half a file.
+        Returns False (and logs why) if it couldn't be written."""
+        tmp = target.with_suffix(".tmp")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+            return True
+        except OSError as e:
+            self.log(tr("couldn't save {name}: {error}", name=name, error=e))
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
+    def _clean_up_folders(self, key: str, deleted: bool) -> None:
+        """A removed torrent is gone from the session (or its files are
+        deleted): delete the folders reserved for it if they're empty."""
+        folders, deleting = self._cleanup.get(key, ([], False))
+        remove_if_empty(folders)
+        if deleted or not deleting:
+            self._cleanup.pop(key, None)
 
     def mark_files(self, h: lt.torrent_handle, indexes=None) -> int:
         """Mark this torrent's finished files (or just `indexes`) as downloaded
@@ -699,8 +758,8 @@ class Engine:
             self._pending_saves += 1
 
     def save_all(self) -> None:
-        for h in self.handles.values():
-            if h.need_save_resume_data():
+        for key, h in self.handles.items():
+            if key in self._unsaved or h.need_save_resume_data():
                 self.save_resume(h)
 
     def pause(self, h: lt.torrent_handle) -> None:
@@ -730,6 +789,11 @@ class Engine:
     def remove(self, h: lt.torrent_handle, delete_files: bool = False) -> None:
         """Drop a torrent from the session and forget it; optionally delete its data."""
         key = key_of(h)
+        # Its folders go once libtorrent is done with them (and only if empty)
+        folders = [Path(h.status().save_path)]
+        if key in self._destinations:
+            folders.append(Path(self._destinations[key]))
+        self._cleanup[key] = (folders, delete_files)
         self.ses.remove_torrent(h, lt.session.delete_files if delete_files else 0)
         (self.torrents_dir / f"{key}.resume").unlink(missing_ok=True)
         old_name = self._old_resume_names.pop(key, None)
@@ -740,6 +804,7 @@ class Engine:
         self._file_choices.pop(key, None)
         self.disk_errors.pop(key, None)
         self._error_files.pop(key, None)
+        self._unsaved.discard(key)
 
     def enforce_seed_ratio(self) -> None:
         """Stop seeding torrents that reached the ratio or the seeding time."""
@@ -876,7 +941,7 @@ class Engine:
         # The 2.0 Python bindings have no session_state(); save_state() writes
         # the same bencoded layout that read_session_params() loads.
         state = self.ses.save_state(lt.save_state_flags_t.save_dht_state)
-        self.session_file.write_bytes(lt.bencode(state))
+        self._write_atomically(self.session_file, lt.bencode(state), self.session_file.name)
 
 
 # -- offline helpers (no session needed) --------------------------------

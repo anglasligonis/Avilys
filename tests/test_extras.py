@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import gzip
+import json
 import time
 from pathlib import Path
 
 import pytest
 
-from avilys import geoip
-from avilys.engine import Config, build_settings, in_window, read_blocklist
+from avilys import config, geoip
+from avilys.engine import Config, Engine, build_settings, in_window, read_blocklist
 from test_engine import engine, make_torrent, wait_for
 
 mmdb_writer = pytest.importorskip("mmdb_writer")
@@ -139,6 +140,36 @@ def test_slow_mode_and_schedule(tmp_path):
     assert eng.slow and (s["download_rate_limit"], s["upload_rate_limit"]) == (100 * 1024, 10 * 1024)
     eng.apply_config(Config(**{**eng.cfg.__dict__, "alt_enabled": False}))
     assert not eng.update_speed_mode() and eng.ses.get_settings()["download_rate_limit"] == 0
+
+
+def test_bad_saved_settings_fall_back_to_defaults(tmp_path):
+    """A settings.json edited by hand (or by another version) with a value of
+    the wrong kind used to stop Avilys from starting. Now that one setting
+    goes back to its default and the others are kept."""
+    state = tmp_path / "state"
+    state.mkdir()
+    default = Config(state_dir=state, save_path=Path.home() / "Downloads")
+    good = {"save_path": str(tmp_path / "data"), "listen": "127.0.0.1:0", "dht": False, "lsd": False,
+            "port_mapping": False, "upload_limit": 100 * 1024, "seed_hours": 12, "alt_schedule": True,
+            "alt_to": "22:30"}
+    bad = {"alt_from": "8", "download_limit": "500", "utp": "yes", "seed_ratio": "2",
+           "active_downloads": True, "watch_dir": ["x"], "interface": 3, "skipped_version": 2}
+    (state / "settings.json").write_text(json.dumps({**good, **bad}))
+    cfg = config.load(state)
+    for name in bad:
+        assert getattr(cfg, name) == getattr(default, name), name
+    assert cfg.save_path == tmp_path / "data" and cfg.upload_limit == 100 * 1024
+    assert cfg.seed_hours == 12 and cfg.alt_schedule and cfg.alt_to == "22:30"
+    Engine(cfg).shutdown()  # starts with what was loaded
+
+    for text in ('{"save_path": 5}', "[]", '"settings"'):
+        (state / "settings.json").write_text(text)
+        assert config.load(state).save_path == default.save_path
+
+    at = lambda hhmm: time.strptime(hhmm, "%H:%M")  # noqa: E731
+    for broken in ("8", "25:00", "08:61", "", "eight", None):
+        assert not in_window(broken, "23:00", at("12:00"))
+        assert not in_window("08:00", broken, at("12:00"))
 
 
 def test_bind_to_interface():
