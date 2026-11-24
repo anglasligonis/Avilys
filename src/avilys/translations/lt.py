@@ -48,6 +48,7 @@ STRINGS = {
     "add failed: {error}": "nepavyko pridėti: {error}",
     "ratio {ratio} reached, stopped: {name}": "pasiektas santykis {ratio}, sustabdyta: {name}",
     "couldn't move files: {error}": "nepavyko perkelti failų: {error}",
+    "couldn't save {name}: {error}": "nepavyko išsaugoti {name}: {error}",
     "blocklist: {error}": "blokavimo sąrašas: {error}",
     "skipping corrupt resume file {name}: {error}": "praleidžiamas sugadintas tęsimo failas {name}: {error}",
     "ignored {what}: {error}": "nepaisoma {what}: {error}",

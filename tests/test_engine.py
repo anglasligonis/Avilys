@@ -3,6 +3,7 @@ and one downloading. No internet needed (DHT, LSD and UPnP are off)."""
 
 from __future__ import annotations
 
+import errno
 import os
 import time
 from pathlib import Path
@@ -171,6 +172,95 @@ def test_alerts_for_removed_torrents_are_harmless(tmp_path):
     eng.pump(0.5)
     assert eng.handles == {}
     assert list((tmp_path / "a" / "state" / "torrents").glob("*.resume")) == []
+    eng.shutdown()
+
+
+def test_a_failed_resume_save_does_not_stop_other_events(tmp_path, monkeypatch):
+    """Writing a resume file can fail (a full disk, say). That must not stop
+    the alert loop, which would drop the rest of the alerts and, in terminal
+    mode, end Avilys without saving. The save is tried again later."""
+    eng = engine(tmp_path, "a")
+    state = tmp_path / "a" / "state"
+    real_write = Path.write_bytes
+    disk_full = True
+
+    def write_bytes(self, data):
+        if disk_full and self.suffix == ".tmp" and state in self.parents:
+            raise OSError(errno.ENOSPC, "No space left on device", str(self))
+        return real_write(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes)
+    first = eng.add("magnet:?xt=urn:btih:" + "1" * 40 + "&dn=one")
+    second = eng.add("magnet:?xt=urn:btih:" + "2" * 40 + "&dn=two")
+    wait_for(eng, lambda: {first, second} <= eng.handles.keys() and eng._pending_saves == 0)
+    assert any("couldn't save one" in e for e in eng.events)
+    assert list(eng.torrents_dir.iterdir()) == []  # no .resume, and no half-written .tmp
+
+    disk_full = False  # space again: the periodic save catches up
+    eng.save_all()
+    wait_for(eng, lambda: {f.name for f in eng.torrents_dir.iterdir()}
+             == {f"{first}.resume", f"{second}.resume"})
+
+    disk_full = True  # shutting down on a full disk still finishes
+    eng.shutdown()
+    assert not (state / "session.dat").exists() and not (state / "session.tmp").exists()
+    assert any("couldn't save session.dat" in e for e in eng.events)
+
+
+def test_removing_a_torrent_leaves_no_empty_folders(tmp_path):
+    """Each download gets a folder of its own (two, with a folder for
+    unfinished downloads). Removing the torrent, or cancelling a magnet's file
+    picker, deletes them if empty. Folders with files, and folders the user
+    picked, stay."""
+    save, staging = tmp_path / "a" / "data", tmp_path / "unfinished"
+    eng = engine(tmp_path, "a", incomplete_dir=staging)
+    folders = lambda: sorted(p.name for p in (*save.iterdir(), *staging.iterdir()))  # noqa: E731
+
+    # A magnet that never got its file list
+    key = eng.add("magnet:?xt=urn:btih:" + "3" * 40 + "&dn=nothing")
+    wait_for(eng, lambda: key in eng.handles)
+    assert len(folders()) == 2  # one to download into, one to move to when done
+    eng.remove(eng.handles[key])
+    wait_for(eng, lambda: folders() == [])
+
+    # A finished download: removed with its files, its folders go too
+    src = tmp_path / "src"
+    src.mkdir()
+    tfile = make_torrent(src, tmp_path / "t.torrent", size=64 * 1024)
+    key = eng.add(str(tfile))
+    wait_for(eng, lambda: key in eng.handles)
+    h = eng.handles[key]
+    (Path(h.status().save_path) / "payload.bin").write_bytes((src / "payload.bin").read_bytes())
+    h.force_recheck()
+    wait_for(eng, lambda: eng.handles[key].status().is_seeding
+             and Path(h.status().save_path).parent == save)  # moved out of the unfinished folder
+    kept = Path(h.status().save_path)
+    eng.remove(h, delete_files=True)
+    wait_for(eng, lambda: folders() == [])
+    assert not kept.exists()
+
+    # Removed without deleting files: the files and their folder stay
+    other = tmp_path / "src2"
+    other.mkdir()
+    tfile = make_torrent(other, tmp_path / "t2.torrent", size=64 * 1024)
+    key = eng.add(str(tfile))
+    wait_for(eng, lambda: key in eng.handles)
+    h = eng.handles[key]
+    folder = Path(h.status().save_path)
+    (folder / "payload.bin").write_bytes((other / "payload.bin").read_bytes())
+    eng.remove(h)
+    eng.pump(0.5)
+    eng.pump(0.5)
+    assert (folder / "payload.bin").exists()
+
+    # A folder the user chose stays even when it is empty
+    mine = tmp_path / "mine"
+    key = eng.add("magnet:?xt=urn:btih:" + "4" * 40 + "&dn=mine", mine, reuse_existing=True)
+    wait_for(eng, lambda: key in eng.handles)
+    eng.remove(eng.handles[key])
+    eng.pump(0.5)
+    eng.pump(0.5)
+    assert mine.is_dir()
     eng.shutdown()
 
 
