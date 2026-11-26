@@ -646,8 +646,11 @@ def what_others_see(tmp_path, name, **overrides):
 
     def looked():
         for p in sh.get_peer_info():
+            pid = bytes.fromhex(str(p.pid))
+            if not any(pid):
+                continue  # handshake not finished: no peer id or client name yet
             clients.add(p.client.decode(errors="replace") if isinstance(p.client, bytes) else p.client)
-            ids.add(bytes.fromhex(str(p.pid))[:8])
+            ids.add(pid[:8])
         return agents and leecher.statuses()[0].is_seeding
 
     wait_for(leecher, looked, others=[seeder])
