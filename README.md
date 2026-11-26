@@ -19,7 +19,8 @@ libtorrent does the protocol work, so you get these without extra code:
 
 **Windows:** download `avilys-<version>-setup.exe` and run it. No admin rights
 are needed. During setup you can choose whether Avilys opens magnet links and
-`.torrent` files.
+`.torrent` files. The installer isn't code-signed yet, so Windows SmartScreen
+may warn about it: choose **More info → Run anyway**.
 
 **Linux:** download `avilys-<version>-x86_64.AppImage`, make it executable
 (`chmod +x`) and run it.
@@ -227,21 +228,6 @@ messages that come from libtorrent itself (the event log and unusual errors),
 and file dialogs drawn by Windows, which follow the Windows language.
 
 See [ROADMAP.md](ROADMAP.md) for what comes next.
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io),
-certificate by [SignPath Foundation](https://signpath.org).
-
-Windows installers are built from this repository's source by GitHub
-Actions (`.github/workflows/build.yml`) and signed only when a release is
-published. Nothing built on a personal computer is signed.
-
-Team roles:
-
-- **Authors and committers:** [anglasligonis](https://github.com/anglasligonis)
-- **Reviewers:** [anglasligonis](https://github.com/anglasligonis)
-- **Approvers** (who approve each signing request): [anglasligonis](https://github.com/anglasligonis)
 
 ## Privacy
 
